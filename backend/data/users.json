@@ -1,0 +1,222 @@
+{
+  "1111": {
+    "password_hash": "0ffe1abd1a08215353c233d6e009613e95eec4253832a761af28ff37ac5a150c",
+    "profile": {
+      "grade": "高一",
+      "gender": "女生",
+      "math_score": "90-110分",
+      "science_feeling": "基础尚可，偶尔吃力"
+    },
+    "created_at": "2025-12-10 20:01:04"
+  },
+  "222": {
+    "password_hash": "9b871512327c09ce91dd649b3f96a63b7408ef267c8cc5710114e629730cb61f",
+    "profile": {
+      "grade": "高三",
+      "gender": "男生",
+      "math_score": "136-150分",
+      "science_feeling": "得心应手，很有自信"
+    },
+    "created_at": "2025-12-10 21:17:21"
+  },
+  "aaa": {
+    "password_hash": "f6e0a1e2ac41945a9aa7ff8a8aaa0cebc12a3bcc981a929ad5cf810a090e11ae",
+    "profile": {
+      "grade": "初一",
+      "gender": "女生",
+      "math_score": "90-110分",
+      "science_feeling": "基础尚可，偶尔吃力"
+    },
+    "created_at": "2025-12-10 21:56:14"
+  },
+  "Steve": {
+    "password_hash": "0ffe1abd1a08215353c233d6e009613e95eec4253832a761af28ff37ac5a150c",
+    "profile": {
+      "grade": "初三",
+      "gender": "男生",
+      "math_score": "90-110分",
+      "science_feeling": "基础尚可，偶尔吃力"
+    },
+    "created_at": "2025-12-10 22:02:05"
+  },
+  "qulu": {
+    "password_hash": "8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92",
+    "profile": {
+      "grade": "初一",
+      "gender": "女生",
+      "math_score": "90-110分",
+      "science_feeling": "基础尚可，偶尔吃力"
+    },
+    "created_at": "2025-12-11 12:54:35"
+  },
+  "ql": {
+    "password_hash": "8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92",
+    "profile": {
+      "grade": "初二",
+      "gender": "女生",
+      "math_score": "136-150分",
+      "science_feeling": "基础尚可，偶尔吃力"
+    },
+    "created_at": "2025-12-11 13:38:41"
+  },
+  "333": {
+    "password_hash": "556d7dc3a115356350f1f9910b1af1ab0e312d4b3e4fc788d2da63668f36d017",
+    "profile": {
+      "grade": "初二",
+      "gender": "男生",
+      "math_score": "110-135分",
+      "science_feeling": "得心应手，很有自信"
+    },
+    "created_at": "2025-12-11 16:38:20"
+  },
+  "5555": {
+    "password_hash": "c1f330d0aff31c1c87403f1e4347bcc21aff7c179908723535f2b31723702525",
+    "profile": {
+      "grade": "高一",
+      "gender": "女生",
+      "math_score": "90-110分",
+      "science_feeling": "基础尚可，偶尔吃力"
+    },
+    "created_at": "2025-12-11 19:55:42"
+  },
+  "ttfttest": {
+    "password_hash": "85777f270ad7cf2a790981bbae3c4e484a1dc55e24a77390d692fbf1cffa12fa",
+    "profile": {
+      "grade": "高一",
+      "gender": "男生",
+      "math_score": "90-110分",
+      "science_feeling": "基础尚可，偶尔吃力"
+    },
+    "created_at": "2025-12-11 21:08:23"
+  },
+  "777": {
+    "password_hash": "eaf89db7108470dc3f6b23ea90618264b3e8f8b6145371667c4055e9c5ce9f52",
+    "profile": {
+      "grade": "四年级",
+      "gender": "男生",
+      "math_score": "90-110分",
+      "science_feeling": "比较困难，需要帮助"
+    },
+    "created_at": "2025-12-11 23:04:22"
+  },
+  "666": {
+    "password_hash": "c7e616822f366fb1b5e0756af498cc11d2c0862edcb32ca65882f622ff39de1b",
+    "profile": {
+      "grade": "六年级",
+      "gender": "男生",
+      "math_score": "0-90分",
+      "science_feeling": "得心应手，很有自信"
+    },
+    "created_at": "2025-12-12 10:51:11"
+  },
+  "888": {
+    "password_hash": "5e968ce47ce4a17e3823c29332a39d049a8d0afb08d157eb6224625f92671a51",
+    "profile": {
+      "grade": "初二",
+      "gender": "男生",
+      "math_score": "0-90分",
+      "science_feeling": "得心应手，很有自信"
+    },
+    "created_at": "2025-12-12 11:13:37"
+  },
+  "999": {
+    "password_hash": "83cf8b609de60036a8277bd0e96135751bbc07eb234256d4b65b893360651bf2",
+    "profile": {
+      "grade": "六年级",
+      "gender": "男生",
+      "math_score": "0-90分",
+      "science_feeling": "基础尚可，偶尔吃力"
+    },
+    "created_at": "2025-12-12 11:49:16"
+  },
+  "11111": {
+    "password_hash": "d17f25ecfbcc7857f7bebea469308be0b2580943e96d13a3ad98a13675c4bfc2",
+    "profile": {
+      "grade": "高一",
+      "gender": "保密",
+      "math_score": "0-90分",
+      "science_feeling": "基础尚可，偶尔吃力"
+    },
+    "created_at": "2025-12-12 14:14:56"
+  },
+  "121212": {
+    "password_hash": "3ea87a56da3844b420ec2925ae922bc731ec16a4fc44dcbeafdad49b0e61d39c",
+    "profile": {
+      "grade": "四年级",
+      "gender": "男生",
+      "math_score": "110-135分",
+      "science_feeling": "比较困难，需要帮助"
+    },
+    "created_at": "2025-12-12 14:29:28"
+  },
+  "bbb": {
+    "password_hash": "3e744b9dc39389baf0c5a0660589b8402f3dbb49b89b3e75f2c9355852a3c677",
+    "profile": {
+      "grade": "初二",
+      "gender": "男生",
+      "math_score": "0-90分",
+      "science_feeling": "得心应手，很有自信"
+    },
+    "created_at": "2025-12-12 14:41:31"
+  },
+  "1414": {
+    "password_hash": "afbfb89027a4dae87c6033eaa07896e93f3f1ddc2214ca43658982e8aa74b4d4",
+    "profile": {
+      "grade": "六年级",
+      "gender": "女生",
+      "math_score": "0-90分",
+      "science_feeling": "基础尚可，偶尔吃力"
+    },
+    "created_at": "2025-12-12 15:47:12"
+  },
+  "张佑泽": {
+    "password_hash": "5194e43f62db778c47476beab322a9c930643eb3e5e312b1bf5fd057a3854192",
+    "profile": {
+      "grade": "五年级",
+      "gender": "男生",
+      "math_score": "136-150分",
+      "science_feeling": "得心应手，很有自信"
+    },
+    "created_at": "2025-12-12 17:29:28"
+  },
+  "111111": {
+    "password_hash": "bcb15f821479b4d5772bd0ca866c00ad5f926e3580720659cc80d39c9d09802a",
+    "profile": {
+      "grade": "四年级",
+      "gender": "保密",
+      "math_score": "90-110分",
+      "science_feeling": "比较困难，需要帮助"
+    },
+    "created_at": "2025-12-12 20:09:04"
+  },
+  "xiaodu": {
+    "password_hash": "faa0b1b6981bd1cac864bd67a2dc8bbb4c2a1bb31e58cd46f06111c92a84a4e8",
+    "profile": {
+      "grade": "五年级",
+      "gender": "女生",
+      "math_score": "90-110分",
+      "science_feeling": "基础尚可，偶尔吃力"
+    },
+    "created_at": "2025-12-13 18:42:07"
+  },
+  "张妍希": {
+    "password_hash": "8591b1359c56cb6b5b312eaed01afe090caa11dd8afce3605141449c7980e2f6",
+    "profile": {
+      "grade": "四年级",
+      "gender": "女生",
+      "math_score": "110-135分",
+      "science_feeling": "基础尚可，偶尔吃力"
+    },
+    "created_at": "2025-12-13 22:39:38"
+  },
+  "tangmengjia": {
+    "password_hash": "c2b6f89925166bddd227eaad6bbcd3ebf0eacbe7a1231a3a5a9f965b1f33fde5",
+    "profile": {
+      "grade": "初一",
+      "gender": "女生",
+      "math_score": "110-135分",
+      "science_feeling": "基础尚可，偶尔吃力"
+    },
+    "created_at": "2025-12-14 12:06:41"
+  }
+}

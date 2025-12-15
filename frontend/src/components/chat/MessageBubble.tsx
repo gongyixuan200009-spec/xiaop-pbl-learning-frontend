@@ -1,0 +1,120 @@
+"use client";
+
+import { motion } from "framer-motion";
+import Image from "next/image";
+import { cn } from "@/lib/utils";
+import { useTypewriter } from "@/hooks/useTypewriter";
+
+interface MessageBubbleProps {
+  role: "user" | "assistant";
+  content: string;
+  imageUrl?: string;
+  isNew?: boolean;
+  isStreaming?: boolean;
+  onTypingComplete?: () => void;
+}
+
+export function MessageBubble({
+  role,
+  content,
+  imageUrl,
+  isNew = false,
+  isStreaming = false,
+  onTypingComplete
+}: MessageBubbleProps) {
+  const isAssistant = role === "assistant";
+
+  // 流式模式下不使用打字机效果
+  const shouldUseTypewriter = isNew && isAssistant && !isStreaming;
+
+  const { displayText, isTyping, skip } = useTypewriter({
+    text: shouldUseTypewriter ? content : content,
+    speed: shouldUseTypewriter ? 20 : 0,
+    onComplete: onTypingComplete,
+  });
+
+  // 流式模式直接显示内容，否则使用打字机效果
+  // 防御性检查：确保 content 是字符串
+  const safeContent = typeof content === 'string' ? content :
+                     (content && typeof content === 'object') ? JSON.stringify(content) : String(content || '');
+  const finalText = isStreaming ? safeContent : (shouldUseTypewriter ? displayText : safeContent);
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.3 }}
+      className={cn(
+        "flex",
+        isAssistant ? "flex-row" : "flex-row-reverse"
+      )}
+      style={{ gap: "var(--space-sm)", marginBottom: "var(--space-sm)" }}
+    >
+      {/* Avatar */}
+      {isAssistant && (
+        <div className="flex-shrink-0">
+          <div
+            className="rounded-full overflow-hidden ring-2 ring-[#0071e3]/20 shadow-md"
+            style={{ width: "var(--avatar-sm)", height: "var(--avatar-sm)" }}
+          >
+            <Image
+              src="/avatar.png"
+              alt="小P"
+              width={40}
+              height={40}
+              className="object-cover w-full h-full"
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Message bubble */}
+      <div
+        className={cn(
+          "shadow-sm",
+          isAssistant
+            ? "bg-white text-[#1d1d1f] border border-[#d2d2d7]/30"
+            : "bg-[#0071e3] text-white shadow-lg shadow-[#0071e3]/20"
+        )}
+        style={{
+          maxWidth: "80%",
+          padding: "var(--space-sm) var(--space-md)",
+          borderRadius: "var(--radius-lg)",
+          borderTopLeftRadius: isAssistant ? "var(--radius-sm)" : "var(--radius-lg)",
+          borderTopRightRadius: isAssistant ? "var(--radius-lg)" : "var(--radius-sm)"
+        }}
+        onClick={isTyping ? skip : undefined}
+      >
+        {/* Image display */}
+        {imageUrl && (
+          <div className="mb-2">
+            <img
+              src={imageUrl}
+              alt="用户上传的图片"
+              className="max-w-full max-h-60 rounded-lg object-contain"
+              style={{ maxWidth: "min(100%, 300px)" }}
+            />
+          </div>
+        )}
+
+        <p
+          className="leading-relaxed whitespace-pre-wrap"
+          style={{ fontSize: "var(--text-sm)" }}
+        >
+          {finalText}
+          {/* 流式模式或打字机效果时显示光标 */}
+          {(isStreaming || isTyping) && (
+            <span
+              className="inline-block bg-[#0071e3] animate-pulse rounded-full"
+              style={{
+                width: "clamp(2px, 0.5vw, 3px)",
+                height: "clamp(12px, 3vw, 16px)",
+                marginLeft: "var(--space-xs)"
+              }}
+            />
+          )}
+        </p>
+      </div>
+    </motion.div>
+  );
+}
