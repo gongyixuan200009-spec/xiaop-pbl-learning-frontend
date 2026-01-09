@@ -87,9 +87,28 @@ class FormConfig(BaseModel):
     user_description: str = ""
     fields: List[str]
     extraction_prompt: str = ""  # 新增：自定义字段提取prompt
+    test_enabled: bool = False   # 是否启用测试
+    test_prompt: str = ""        # 测试提示词
+    test_pass_pattern: str = ""  # 测试通过的关键词模式
 
 class FormConfigUpdate(BaseModel):
     forms: List[FormConfig]
 
 class AdminLogin(BaseModel):
     password: str
+
+# ========== 测试相关 ==========
+class TestStartRequest(BaseModel):
+    form_id: int
+
+class TestStartResponse(BaseModel):
+    success: bool
+    test_enabled: bool
+    message: str
+    initial_prompt: str = ""  # 测试开始时的提示
+
+class TestMessageRequest(BaseModel):
+    message: str
+    form_id: int
+    test_chat_history: List[ChatMessage] = []
+    extracted_fields: Dict[str, Union[str, List[str]]] = {}

@@ -1,0 +1,778 @@
+from fastapi import APIRouter, HTTPException
+from fastapi.responses import FileResponse
+import hashlib
+import json
+import os
+from pathlib import Path
+from typing import List, Dict, Any, Optional
+
+from pydantic import BaseModel
+from models.schemas import FormConfigUpdate, AdminLogin
+from config import load_form_config, save_form_config, DATA_DIR
+
+router = APIRouter(prefix="/api/admin", tags=["管理"])
+
+# 管理员密码
+ADMIN_PASSWORD_FILE = DATA_DIR / "admin_password.json"
+DEFAULT_PASSWORD_HASH = hashlib.sha256("admin123".encode()).hexdigest()
+
+def get_password_hash():
+    if ADMIN_PASSWORD_FILE.exists():
+        with open(ADMIN_PASSWORD_FILE, "r") as f:
+            data = json.load(f)
+            return data.get("password_hash", DEFAULT_PASSWORD_HASH)
+    return DEFAULT_PASSWORD_HASH
+
+def verify_admin_password(password: str) -> bool:
+    password_hash = hashlib.sha256(password.encode()).hexdigest()
+    return password_hash == get_password_hash()
+
+@router.post("/login")
+async def admin_login(data: AdminLogin):
+    """管理员登录"""
+    if not verify_admin_password(data.password):
+        raise HTTPException(status_code=401, detail="密码错误")
+    return {"success": True, "message": "登录成功"}
+
+@router.get("/forms")
+async def get_forms():
+    """获取表格配置"""
+    return load_form_config()
+
+@router.put("/forms")
+async def update_forms(data: FormConfigUpdate):
+    """更新表格配置"""
+    from services.prompt_history import record_form_config_change, record_test_config_change
+
+    config = {"forms": [f.model_dump() for f in data.forms]}
+    save_form_config(config)
+
+    # 记录每个表单的修改历史
+    for form in data.forms:
+        form_dict = form.model_dump()
+        form_id = str(form_dict.get("id", ""))
+        form_name = form_dict.get("name", "")
+
+        # 记录表单配置修改
+        record_form_config_change(
+            form_id=form_id,
+            form_name=form_name,
+            changes={
+                "description": form_dict.get("description", ""),
+                "extraction_prompt": form_dict.get("extraction_prompt", ""),
+                "fields": form_dict.get("fields", []),
+            },
+            description=f"更新表单配置"
+        )
+
+        # 如果启用了测试，单独记录测试配置修改
+        test_enabled = form_dict.get("test_enabled", False)
+        test_prompt = form_dict.get("test_prompt", "")
+        test_pass_pattern = form_dict.get("test_pass_pattern", "")
+
+        if test_enabled or test_prompt:
+            record_test_config_change(
+                form_id=form_id,
+                form_name=form_name,
+                test_config={
+                    "test_enabled": test_enabled,
+                    "test_prompt": test_prompt,
+                    "test_pass_pattern": test_pass_pattern,
+                },
+                description=f"更新关卡测试配置"
+            )
+
+    return {"success": True, "message": "配置已保存"}
+
+@router.get("/data")
+async def list_data_files():
+    """列出所有数据文件"""
+    csv_dir = DATA_DIR / "form_data"
+    if not csv_dir.exists():
+        return []
+    
+    files = []
+    for f in csv_dir.iterdir():
+        if f.suffix == ".csv":
+            files.append({
+                "name": f.name,
+                "size": f.stat().st_size,
+                "modified": f.stat().st_mtime
+            })
+    return sorted(files, key=lambda x: x["modified"], reverse=True)
+
+@router.get("/data/{filename}")
+async def download_data(filename: str):
+    """下载数据文件"""
+    file_path = DATA_DIR / "form_data" / filename
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="文件不存在")
+    return FileResponse(
+        path=file_path,
+        filename=filename,
+        media_type="text/csv"
+    )
+
+@router.get("/users")
+async def list_users():
+    """列出所有用户及其进度"""
+    progress_dir = DATA_DIR / "user_progress"
+    users_file = DATA_DIR / "users.json"
+
+    users_list = []
+
+    # 获取所有用户
+    users_data = {}  # 确保 users_data 始终被定义
+    if users_file.exists():
+        with open(users_file, "r", encoding="utf-8") as f:
+            users_data = json.load(f)
+    all_usernames = list(users_data.keys())
+    
+    # 也从进度文件中获取用户名
+    if progress_dir.exists():
+        for f in progress_dir.iterdir():
+            if f.suffix == ".json":
+                username = f.stem
+                if username not in all_usernames:
+                    all_usernames.append(username)
+    
+    for username in all_usernames:
+        user_info = {
+            "username": username,
+            "current_step": 1,
+            "completed_steps": [],
+            "step_data": {},
+            "profile": users_data.get(username, {}).get("profile", {})
+        }
+        
+        progress_file = progress_dir / f"{username}.json"
+        if progress_file.exists():
+            try:
+                with open(progress_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    user_info["current_step"] = data.get("current_step", 1)
+                    user_info["completed_steps"] = data.get("completed_steps", [])
+                    user_info["step_data"] = data.get("step_data", {})
+            except Exception as e:
+                pass
+        
+        users_list.append(user_info)
+    
+    return {"users": users_list}
+
+@router.get("/users/{username}")
+async def get_user_detail(username: str):
+    """获取指定用户的详细数据"""
+    progress_dir = DATA_DIR / "user_progress"
+    progress_file = progress_dir / f"{username}.json"
+
+    if not progress_file.exists():
+        raise HTTPException(status_code=404, detail="用户不存在或无进度数据")
+
+    with open(progress_file, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    return data
+
+@router.get("/export-users")
+async def export_users_csv():
+    """导出所有用户信息为CSV文件"""
+    import csv
+    import io
+    from datetime import datetime
+    from fastapi.responses import StreamingResponse
+
+    progress_dir = DATA_DIR / "user_progress"
+    users_file = DATA_DIR / "users.json"
+
+    # 获取所有用户
+    users_data = {}
+    if users_file.exists():
+        with open(users_file, "r", encoding="utf-8") as f:
+            users_data = json.load(f)
+
+    all_usernames = list(users_data.keys())
+
+    # 从进度文件中补充用户名
+    if progress_dir.exists():
+        for f in progress_dir.iterdir():
+            if f.suffix == ".json":
+                username = f.stem
+                if username not in all_usernames:
+                    all_usernames.append(username)
+
+    # 收集所有用户数据
+    users_list = []
+    for username in all_usernames:
+        user_info = {
+            "用户名": username,
+            "当前阶段": 1,
+            "已完成阶段": "",
+            "年龄": "",
+            "性别": "",
+            "学校": "",
+            "年级": "",
+        }
+
+        # 获取用户 profile
+        profile = users_data.get(username, {}).get("profile", {})
+        user_info["年龄"] = profile.get("age", "")
+        user_info["性别"] = profile.get("gender", "")
+        user_info["学校"] = profile.get("school", "")
+        user_info["年级"] = profile.get("grade", "")
+
+        # 获取进度信息
+        progress_file = progress_dir / f"{username}.json"
+        if progress_file.exists():
+            try:
+                with open(progress_file, "r", encoding="utf-8") as pf:
+                    data = json.load(pf)
+                    user_info["当前阶段"] = data.get("current_step", 1)
+                    completed = data.get("completed_steps", [])
+                    user_info["已完成阶段"] = ", ".join(map(str, completed)) if completed else ""
+
+                    # 提取每个阶段的字段数据
+                    step_data = data.get("step_data", {})
+                    for step_id, step_info in step_data.items():
+                        extracted = step_info.get("extracted_fields", {})
+                        for field_name, field_value in extracted.items():
+                            col_name = f"阶段{step_id}_{field_name}"
+                            user_info[col_name] = field_value if field_value else ""
+
+                        # 提取测试状态数据
+                        test_state = step_info.get("test_state", {})
+                        if test_state:
+                            # 测试状态
+                            is_in_test = test_state.get("is_in_test", False)
+                            test_passed = test_state.get("test_passed", False)
+                            if test_passed:
+                                status = "已通过"
+                            elif is_in_test:
+                                status = "进行中"
+                            else:
+                                status = "未开始"
+                            user_info[f"阶段{step_id}_测试状态"] = status
+
+                            # 测试凭证
+                            test_credential = test_state.get("test_credential", "")
+                            user_info[f"阶段{step_id}_测试凭证"] = test_credential
+
+                            # 测试对话（格式化为可读文本）
+                            test_chat = test_state.get("test_chat_history", [])
+                            if test_chat:
+                                chat_text = []
+                                for msg in test_chat:
+                                    role = "用户" if msg.get("role") == "user" else "小P"
+                                    content = msg.get("content", "")
+                                    chat_text.append(f"[{role}]: {content}")
+                                user_info[f"阶段{step_id}_测试对话"] = " | ".join(chat_text)
+                            else:
+                                user_info[f"阶段{step_id}_测试对话"] = ""
+            except Exception as e:
+                pass
+
+        users_list.append(user_info)
+
+    # 收集所有可能的列名
+    all_columns = ["用户名", "当前阶段", "已完成阶段", "年龄", "性别", "学校", "年级"]
+    extra_columns = set()
+    for user in users_list:
+        for key in user.keys():
+            if key not in all_columns:
+                extra_columns.add(key)
+    all_columns.extend(sorted(extra_columns))
+
+    # 生成CSV（带UTF-8 BOM以支持Excel正确显示中文）
+    output = io.StringIO()
+    writer = csv.DictWriter(output, fieldnames=all_columns, extrasaction='ignore')
+    writer.writeheader()
+    for user in users_list:
+        writer.writerow(user)
+
+    # 添加UTF-8 BOM并转换为bytes
+    output.seek(0)
+    csv_content = '\ufeff' + output.getvalue()  # 添加BOM
+    csv_bytes = csv_content.encode('utf-8')
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"users_export_{timestamp}.csv"
+
+    return StreamingResponse(
+        iter([csv_bytes]),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
+    )
+
+@router.post("/password")
+async def change_password(old_password: str, new_password: str):
+    """修改管理员密码"""
+    if not verify_admin_password(old_password):
+        raise HTTPException(status_code=401, detail="原密码错误")
+    
+    new_hash = hashlib.sha256(new_password.encode()).hexdigest()
+    with open(ADMIN_PASSWORD_FILE, "w") as f:
+        json.dump({"password_hash": new_hash}, f)
+    
+    return {"success": True, "message": "密码已修改"}
+
+# ========== Prompt 预览 ==========
+from services.prompt_preview import (
+    get_prompt_previews,
+    get_age_adaptation_info,
+    load_custom_age_adaptation_config,
+    save_custom_age_adaptation_config,
+    AGE_ADAPTATION_RULES
+)
+
+class PromptPreviewRequest(BaseModel):
+    form_config: Dict[str, Any]
+    include_previous: bool = False
+    mode: str = "dual_agent"  # "single_agent" 或 "dual_agent"
+    user_profile: Optional[Dict[str, str]] = None  # 用于年龄段适配预览
+
+@router.post("/prompt-preview")
+async def preview_prompts(data: PromptPreviewRequest):
+    """预览表单的 prompts
+
+    支持两种模式:
+    - single_agent: 单Agent模式，同时处理提取和回复
+    - dual_agent: 双Agent模式，分开处理提取和回复
+
+    可选传入 user_profile 来预览不同年龄段的适配效果
+    """
+    try:
+        previews = get_prompt_previews(
+            data.form_config,
+            data.include_previous,
+            data.mode,
+            data.user_profile
+        )
+        return previews
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/age-adaptation-rules")
+async def get_age_rules():
+    """获取年龄段适配规则信息"""
+    try:
+        return get_age_adaptation_info()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class AgeAdaptationConfigUpdate(BaseModel):
+    custom_rules: Dict[str, Dict[str, str]]
+
+
+@router.put("/age-adaptation-rules")
+async def update_age_rules(data: AgeAdaptationConfigUpdate):
+    """更新年龄段适配规则（只保存自定义部分）"""
+    from services.prompt_history import record_age_adaptation_change
+
+    try:
+        success = save_custom_age_adaptation_config(data.custom_rules)
+        if success:
+            # 记录每个年龄段的修改历史
+            for age_group, rules in data.custom_rules.items():
+                if rules:  # 只记录有内容的修改
+                    record_age_adaptation_change(
+                        age_group=age_group,
+                        rules=rules,
+                        description=f"更新 {age_group} 年龄段适配规则"
+                    )
+
+            return {
+                "success": True,
+                "message": "年龄段适配规则已更新",
+                "custom_rules": data.custom_rules
+            }
+        else:
+            raise HTTPException(status_code=500, detail="保存配置失败")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/age-adaptation-rules")
+async def reset_age_rules():
+    """重置年龄段适配规则为默认值（删除自定义配置）"""
+    try:
+        success = save_custom_age_adaptation_config({})
+        if success:
+            return {
+                "success": True,
+                "message": "年龄段适配规则已重置为默认值"
+            }
+        else:
+            raise HTTPException(status_code=500, detail="重置配置失败")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ========== 聊天模式管理 ==========
+from config import load_api_config
+
+class ChatModeUpdate(BaseModel):
+    chat_mode: str  # "dual_agent" or "single_agent"
+
+@router.get("/chat-mode")
+async def get_chat_mode():
+    """获取当前聊天模式"""
+    config = load_api_config()
+    return {
+        "chat_mode": config.get("chat_mode", "dual_agent"),
+        "available_modes": [
+            {
+                "value": "dual_agent",
+                "label": "双Agent模式",
+                "description": "分离的提取和回复模型，提取更精确，但需要两次LLM调用"
+            },
+            {
+                "value": "single_agent",
+                "label": "单Agent模式",
+                "description": "一个Agent同时处理提取和回复，只需一次LLM调用，速度更快"
+            }
+        ]
+    }
+
+@router.put("/chat-mode")
+async def update_chat_mode(data: ChatModeUpdate):
+    """更新聊天模式"""
+    if data.chat_mode not in ["dual_agent", "single_agent"]:
+        raise HTTPException(status_code=400, detail="无效的聊天模式")
+
+    config = load_api_config()
+    config["chat_mode"] = data.chat_mode
+
+    # 保存配置
+    config_path = DATA_DIR / "api_key_config.json"
+    with open(config_path, "w", encoding="utf-8") as f:
+        json.dump(config, f, ensure_ascii=False, indent=4)
+
+    return {"success": True, "chat_mode": data.chat_mode, "message": f"聊天模式已切换为: {data.chat_mode}"}
+
+# ========== Pipeline 流程管理 ==========
+from config import get_active_pipeline_id, set_active_pipeline_id
+from services.pipeline_service import (
+    list_pipelines,
+    get_pipeline,
+    save_custom_pipeline,
+    delete_custom_pipeline,
+    copy_pipeline_with_prompts,
+    get_default_prompts,
+    get_default_prompt_for_step_type,
+    Pipeline,
+    PipelineStep,
+    PipelineOutput,
+    PRESET_PIPELINES
+)
+
+class PipelineStepModel(BaseModel):
+    id: str
+    name: str
+    type: str  # extract, reply, extract_and_reply
+    model: str = "default"  # fast, default, vision
+    prompt_template: str | None = None
+    context_from: List[str] = []
+
+class PipelineOutputModel(BaseModel):
+    table_from: List[str] = []
+    reply_from: List[str] = []
+
+class PipelineModel(BaseModel):
+    id: str
+    name: str
+    description: str = ""
+    steps: List[PipelineStepModel]
+    output: PipelineOutputModel
+
+class ActivePipelineUpdate(BaseModel):
+    pipeline_id: str
+
+@router.get("/pipelines")
+async def get_all_pipelines():
+    """获取所有Pipeline配置（包括预置和自定义）"""
+    pipelines = list_pipelines()
+    active_id = get_active_pipeline_id()
+    return {
+        "pipelines": pipelines,
+        "active_pipeline": active_id,
+        "step_types": [
+            {"value": "extract", "label": "字段提取", "description": "从对话中提取表格字段"},
+            {"value": "reply", "label": "生成回复", "description": "生成AI回复"},
+            {"value": "extract_and_reply", "label": "提取+回复", "description": "单Agent同时提取和回复"}
+        ],
+        "model_types": [
+            {"value": "fast", "label": "快速模型", "description": "适合提取任务，速度快"},
+            {"value": "default", "label": "默认模型", "description": "平衡速度和质量"},
+            {"value": "vision", "label": "视觉模型", "description": "支持图片理解"}
+        ]
+    }
+
+# 注意：/pipelines/active 路由必须在 /pipelines/{pipeline_id} 之前定义
+# 否则 FastAPI 会将 "active" 当作 pipeline_id 处理
+
+@router.get("/pipelines/active")
+async def get_active_pipeline():
+    """获取当前激活的Pipeline"""
+    pipeline_id = get_active_pipeline_id()
+    pipeline = get_pipeline(pipeline_id)
+
+    if not pipeline:
+        # 如果配置的Pipeline不存在，回退到默认
+        pipeline_id = "dual_agent"
+        pipeline = get_pipeline(pipeline_id)
+        set_active_pipeline_id(pipeline_id)
+
+    return {
+        "active_pipeline": pipeline_id,
+        "pipeline": pipeline.to_dict() if pipeline else None
+    }
+
+@router.put("/pipelines/active")
+async def set_active_pipeline(data: ActivePipelineUpdate):
+    """设置当前激活的Pipeline"""
+    # 验证Pipeline存在
+    pipeline = get_pipeline(data.pipeline_id)
+    if not pipeline:
+        raise HTTPException(status_code=404, detail="Pipeline不存在")
+
+    set_active_pipeline_id(data.pipeline_id)
+
+    return {
+        "success": True,
+        "message": f"已切换到Pipeline: {pipeline.name}",
+        "active_pipeline": data.pipeline_id
+    }
+
+
+# 注意：以下静态路由必须在 /pipelines/{pipeline_id} 之前定义
+# 否则 FastAPI 会将路径参数当作 pipeline_id
+
+@router.get("/pipelines/default-prompts")
+async def get_all_default_prompts():
+    """获取所有步骤类型的默认 Prompt"""
+    return {
+        "success": True,
+        "prompts": get_default_prompts()
+    }
+
+
+@router.get("/pipelines/default-prompts/{step_type}")
+async def get_step_default_prompt(step_type: str):
+    """获取指定步骤类型的默认 Prompt"""
+    prompt = get_default_prompt_for_step_type(step_type)
+    if not prompt:
+        raise HTTPException(status_code=404, detail=f"未找到步骤类型 {step_type} 的默认 Prompt")
+    return {
+        "success": True,
+        "step_type": step_type,
+        "prompt": prompt
+    }
+
+
+class CopyPipelineRequest(BaseModel):
+    source_id: str
+    new_id: str | None = None
+    new_name: str | None = None
+
+
+@router.post("/pipelines/copy-with-prompts")
+async def copy_pipeline_with_full_prompts(data: CopyPipelineRequest):
+    """
+    复制一个 Pipeline，并填充所有步骤的完整 Prompt。
+    用于让用户可以查看和编辑实际使用的 Prompt 模板。
+    """
+    new_pipeline = copy_pipeline_with_prompts(data.source_id, data.new_id)
+    if not new_pipeline:
+        raise HTTPException(status_code=404, detail="源 Pipeline 不存在")
+
+    # 如果提供了新名称，使用新名称
+    if data.new_name:
+        new_pipeline = Pipeline(
+            id=new_pipeline.id,
+            name=data.new_name,
+            description=new_pipeline.description,
+            steps=new_pipeline.steps,
+            output=new_pipeline.output
+        )
+
+    return {
+        "success": True,
+        "message": "Pipeline 复制成功，已填充完整的 Prompt 模板",
+        "pipeline": new_pipeline.to_dict()
+    }
+
+
+@router.get("/pipelines/{pipeline_id}")
+async def get_pipeline_detail(pipeline_id: str):
+    """获取单个Pipeline详情"""
+    pipeline = get_pipeline(pipeline_id)
+    if not pipeline:
+        raise HTTPException(status_code=404, detail="Pipeline不存在")
+
+    result = pipeline.to_dict()
+    result["is_preset"] = pipeline_id in PRESET_PIPELINES
+    return result
+
+@router.post("/pipelines")
+async def create_pipeline(data: PipelineModel):
+    """创建新的自定义Pipeline"""
+    # 检查ID是否与预置Pipeline冲突
+    if data.id in PRESET_PIPELINES:
+        raise HTTPException(status_code=400, detail="不能使用预置Pipeline的ID")
+
+    # 检查是否已存在
+    existing = get_pipeline(data.id)
+    if existing and data.id in PRESET_PIPELINES:
+        raise HTTPException(status_code=400, detail="Pipeline ID已存在")
+
+    # 构建Pipeline对象
+    steps = [
+        PipelineStep(
+            id=s.id,
+            name=s.name,
+            type=s.type,
+            model=s.model,
+            prompt_template=s.prompt_template,
+            context_from=s.context_from
+        )
+        for s in data.steps
+    ]
+
+    pipeline = Pipeline(
+        id=data.id,
+        name=data.name,
+        description=data.description,
+        steps=steps,
+        output=PipelineOutput(
+            table_from=data.output.table_from,
+            reply_from=data.output.reply_from
+        )
+    )
+
+    success = save_custom_pipeline(pipeline)
+    if not success:
+        raise HTTPException(status_code=500, detail="保存Pipeline失败")
+
+    return {"success": True, "message": "Pipeline创建成功", "pipeline": pipeline.to_dict()}
+
+@router.put("/pipelines/{pipeline_id}")
+async def update_pipeline(pipeline_id: str, data: PipelineModel):
+    """更新自定义Pipeline"""
+    # 不能更新预置Pipeline
+    if pipeline_id in PRESET_PIPELINES:
+        raise HTTPException(status_code=400, detail="不能修改预置Pipeline")
+
+    # 确保ID一致
+    if data.id != pipeline_id:
+        raise HTTPException(status_code=400, detail="Pipeline ID不匹配")
+
+    # 构建Pipeline对象
+    steps = [
+        PipelineStep(
+            id=s.id,
+            name=s.name,
+            type=s.type,
+            model=s.model,
+            prompt_template=s.prompt_template,
+            context_from=s.context_from
+        )
+        for s in data.steps
+    ]
+
+    pipeline = Pipeline(
+        id=data.id,
+        name=data.name,
+        description=data.description,
+        steps=steps,
+        output=PipelineOutput(
+            table_from=data.output.table_from,
+            reply_from=data.output.reply_from
+        )
+    )
+
+    success = save_custom_pipeline(pipeline)
+    if not success:
+        raise HTTPException(status_code=500, detail="更新Pipeline失败")
+
+    return {"success": True, "message": "Pipeline更新成功", "pipeline": pipeline.to_dict()}
+
+@router.delete("/pipelines/{pipeline_id}")
+async def remove_pipeline(pipeline_id: str):
+    """删除自定义Pipeline"""
+    # 不能删除预置Pipeline
+    if pipeline_id in PRESET_PIPELINES:
+        raise HTTPException(status_code=400, detail="不能删除预置Pipeline")
+
+    # 如果正在使用，不允许删除
+    active_id = get_active_pipeline_id()
+    if active_id == pipeline_id:
+        raise HTTPException(status_code=400, detail="不能删除正在使用的Pipeline，请先切换到其他Pipeline")
+
+    success = delete_custom_pipeline(pipeline_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="Pipeline不存在")
+
+    return {"success": True, "message": "Pipeline删除成功"}
+
+
+# ========== Prompt 修改历史记录 ==========
+from services.prompt_history import (
+    get_history,
+    get_history_record,
+    get_history_types,
+    add_history_record,
+    record_form_config_change,
+    record_age_adaptation_change,
+    record_test_config_change,
+    clear_history
+)
+
+
+@router.get("/prompt-history")
+async def get_prompt_history(
+    record_type: Optional[str] = None,
+    identifier: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0
+):
+    """获取 Prompt 修改历史记录"""
+    try:
+        result = get_history(
+            record_type=record_type,
+            identifier=identifier,
+            limit=limit,
+            offset=offset
+        )
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/prompt-history/types")
+async def get_prompt_history_types():
+    """获取历史记录类型列表"""
+    return {"types": get_history_types()}
+
+
+@router.get("/prompt-history/{record_id}")
+async def get_prompt_history_detail(record_id: int):
+    """获取单条历史记录详情"""
+    record = get_history_record(record_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="记录不存在")
+    return record
+
+
+class ClearHistoryRequest(BaseModel):
+    before_date: Optional[str] = None
+
+
+@router.delete("/prompt-history")
+async def clear_prompt_history(data: ClearHistoryRequest = None):
+    """清理历史记录"""
+    try:
+        before_date = data.before_date if data else None
+        count = clear_history(before_date)
+        return {"success": True, "message": f"已清理 {count} 条记录"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

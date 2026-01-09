@@ -52,21 +52,25 @@ def build_single_agent_messages(
     previous_summaries: Optional[List[Dict]] = None,
     image_url: Optional[str] = None
 ) -> List[Dict[str, str]]:
-    """构建单agent模式的消息列表（同时处理提取和回复）"""
+    """构建单agent模式的消息列表（同时处理提取和回复）
 
-    # 计算待提取字段
-    remaining_fields = [f for f in form_config["fields"] if f not in extracted_fields]
+    注意：每次都会提取所有字段，新结果会覆盖旧结果。
+    这样用户可以修改之前填写的内容。
+    """
+
+    # 每次提取所有字段，而不是只提取剩余字段
+    # 这样用户可以修改之前已经填写的内容
+    all_fields = form_config["fields"]
 
     filled_summary = ""
     if extracted_fields:
-        filled_summary = "已填写：\n"
+        filled_summary = "已填写（可以被新回答覆盖）：\n"
         for f, v in extracted_fields.items():
             filled_summary += f"- {f}: {v}\n"
     else:
         filled_summary = "尚未填写任何字段"
 
-    fields_str = ", ".join(form_config["fields"])
-    remaining_str = ", ".join(remaining_fields) if remaining_fields else "无"
+    fields_str = ", ".join(all_fields)
 
     previous_context = ""
     if previous_summaries:
@@ -78,28 +82,11 @@ def build_single_agent_messages(
                 for k, v in ps['extracted_fields'].items():
                     previous_context += f"  - {k}: {v}\n"
 
-    # 构建JSON模板 - 包含所有字段（已填写的显示当前值，未填写的显示null）
-    json_parts = []
-    for f in form_config["fields"]:
-        if f in extracted_fields:
-            # 已填写的字段显示当前值
-            val = extracted_fields[f]
-            # 处理不同类型的值
-            if isinstance(val, (list, dict)):
-                # list或dict类型直接序列化为JSON
-                val_json = json.dumps(val, ensure_ascii=False)
-                json_parts.append(f'"{f}": {val_json}')
-            else:
-                # 字符串类型需要转义引号和反斜杠
-                val_str = str(val).replace('\\', '\\\\').replace('"', '\\"')
-                json_parts.append(f'"{f}": "{val_str}"')
-        else:
-            # 未填写的字段显示null
-            json_parts.append(f'"{f}": null')
-    json_template = "{" + ", ".join(json_parts) + "}"
+    # 构建JSON模板 - 包含所有字段
+    json_template = "{" + ", ".join([f'"{f}": null' for f in all_fields]) + "}"
 
     system_prompt = f"""你现在必须完全扮演以下角色，并且在每次回复时同时完成两个任务：
-1. 从学生的回答中提取符合要求的字段信息
+1. 从学生的对话中提取符合要求的字段信息（每次都重新提取所有字段）
 2. 作为老师进行引导回复
 
 【角色设定】
@@ -115,7 +102,6 @@ def build_single_agent_messages(
 【当前任务】
 引导学生填写表格。
 目标字段：{fields_str}
-待提取字段：{remaining_str}
 
 【已收集信息】
 {filled_summary}
@@ -133,11 +119,9 @@ def build_single_agent_messages(
 
 【重要提示】
 - [TABLE]和[/TABLE]之间必须是有效的JSON格式
-- **每次必须输出包含所有字段的完整JSON表格**
-- 已填写的字段：如果无需修改则保持原值，如果需要根据新信息更新则填入新值
-- 未填写的字段：如果本轮提取到了内容则填入，否则填null
-- 你可以根据对话进展修改之前已填写的字段内容
-- 如果没有提取到任何字段，JSON中所有值都填null
+- JSON中包含所有字段，每次都重新从整个对话中提取
+- 如果学生提供了新的回答，新结果会覆盖旧结果
+- 如果没有提取到某个字段的内容，该字段填null
 - [/TABLE]之后的内容才是显示给学生的回复
 - 回复时不要刻意说"已记录"等提示语
 - 你具备图片识别能力，可以查看和分析用户发送的图片
@@ -188,7 +172,7 @@ def parse_single_agent_response(response: str, form_config: Dict[str, Any], alre
             if debug:
                 logger.info(f"[DEBUG][单Agent] 解析后的JSON对象: {result}")
 
-            # 过滤有效的提取结果（包括更新已有字段）
+            # 过滤有效的提取结果
             for field, value in result.items():
                 if debug:
                     logger.info(f"[DEBUG][单Agent] 检查字段 '{field}': 值='{value}', 类型={type(value)}")
@@ -197,15 +181,18 @@ def parse_single_agent_response(response: str, form_config: Dict[str, Any], alre
                     logger.info(f"[DEBUG][单Agent] 值不是null: {str(value).lower() != 'null'}")
 
                 if field in form_config["fields"] and value and str(value).lower() != "null":
-                    # 无论是新字段还是已有字段，都记录（允许更新）
-                    if field not in already_extracted:
+                    # 新提取的值会覆盖旧值
+                    if field in already_extracted:
+                        if already_extracted[field] != value:
+                            # 更新已有字段
+                            extracted[field] = value
+                            logger.info(f"[单Agent] 更新字段: {field} = {str(value)[:50]}... (旧值: {str(already_extracted[field])[:30]}...)")
+                        elif debug:
+                            logger.info(f"[DEBUG][单Agent] 字段 '{field}' 值相同，跳过")
+                    else:
+                        # 新增字段
                         extracted[field] = value
-                        logger.info(f"[单Agent] 新提取字段: {field} = {str(value)[:50]}...")
-                    elif already_extracted[field] != value:
-                        extracted[field] = value
-                        logger.info(f"[单Agent] 更新字段: {field} = {str(value)[:50]}... (旧值: {str(already_extracted[field])[:30]}...)")
-                    elif debug:
-                        logger.info(f"[DEBUG][单Agent] 字段 '{field}' 值未变化，跳过")
+                        logger.info(f"[单Agent] 新增字段: {field} = {str(value)[:50]}...")
                 elif debug:
                     logger.info(f"[DEBUG][单Agent] 字段 '{field}' 不满足提取条件")
 

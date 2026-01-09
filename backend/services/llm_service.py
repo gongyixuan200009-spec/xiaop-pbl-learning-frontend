@@ -512,21 +512,27 @@ def extract_fields(
     conversation_text: str,
     already_extracted: Dict[str, str]
 ) -> Dict[str, str]:
-    """从对话中提取字段信息"""
+    """从对话中提取字段信息
+
+    注意：每次都会尝试提取所有字段，新结果会覆盖旧结果。
+    这样用户可以修改之前填写的内容。
+    """
     start_time = time.time()
 
-    remaining_fields = [f for f in form_config["fields"] if f not in already_extracted]
+    # 每次都提取所有字段，而不是只提取剩余字段
+    # 这样用户可以修改之前已经填写的内容
+    all_fields = form_config["fields"]
 
-    if not remaining_fields:
-        logger.info(f"[TIMING][字段提取] 无待提取字段，跳过")
+    if not all_fields:
+        logger.info(f"[TIMING][字段提取] 无字段需要提取，跳过")
         return {}
 
-    json_template = "{" + ", ".join([f'"{f}": null' for f in remaining_fields]) + "}"
+    json_template = "{" + ", ".join([f'"{f}": null' for f in all_fields]) + "}"
     recent_conversation = conversation_text[-1000:]
 
     # 构建更详细的字段要求说明
     field_requirements = []
-    for field in remaining_fields:
+    for field in all_fields:
         req = f"- {field}"
         if "(如何" in field or "(怎样" in field:
             req += " -> 必须是以'如何'或'怎样'开头的工程问题陈述"
@@ -586,10 +592,18 @@ def extract_fields(
         filtered = {}
         for field, value in result.items():
             if field in form_config["fields"] and value and str(value).lower() != "null":
-                if field not in already_extracted or already_extracted[field] != value:
+                # 新提取的值会覆盖旧值，即使字段已存在
+                val_str = str(value)
+                if field in already_extracted:
+                    if already_extracted[field] != value:
+                        # 更新已有字段
+                        filtered[field] = value
+                        logger.info(f"更新字段: {field} = {val_str[:50] if len(val_str) > 50 else val_str}... (旧值: {str(already_extracted[field])[:30]}...)")
+                    # 如果值相同，不需要重复记录
+                else:
+                    # 新增字段
                     filtered[field] = value
-                    val_str = str(value)
-                    logger.info(f"提取字段: {field} = {val_str[:50] if len(val_str) > 50 else val_str}...")
+                    logger.info(f"新增字段: {field} = {val_str[:50] if len(val_str) > 50 else val_str}...")
 
         total_time = (time.time() - start_time) * 1000
         logger.info(f"[TIMING][字段提取] 总耗时: {total_time:.0f}ms, 提取到: {list(filtered.keys())}")

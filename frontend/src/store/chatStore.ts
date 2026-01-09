@@ -7,6 +7,11 @@ interface StepProgress {
   chatHistory: ChatMessage[];
   isConfirmed: boolean;
   summary: string;
+  // 测试阶段相关
+  isInTest: boolean;
+  testPassed: boolean;
+  testChatHistory: ChatMessage[];
+  testCredential: string;
 }
 
 interface ChatState {
@@ -22,6 +27,12 @@ interface ChatState {
   stepProgress: Record<number, StepProgress>;  // 每个阶段的进度
   previousSummaries: PreviousSummary[];  // 前面阶段的总结
   needsConfirmation: boolean;  // 是否需要确认
+
+  // 新增：测试阶段相关
+  isInTest: boolean;  // 是否在测试阶段
+  testPassed: boolean;  // 测试是否通过
+  testChatHistory: ChatMessage[];  // 测试对话历史
+  testCredential: string;  // 测试通过凭证
 
   setForms: (forms: FormConfig[]) => void;
   setCurrentForm: (formId: number) => void;
@@ -41,6 +52,16 @@ interface ChatState {
   isStepConfirmed: (formId: number) => boolean;
   loadStepProgress: (formId: number) => void;
 
+  // 新增：测试阶段方法
+  startTest: () => void;  // 开始测试
+  addTestMessage: (message: ChatMessage) => void;  // 添加测试消息
+  setTestPassed: (passed: boolean, credential: string) => void;  // 设置测试通过
+  resetTest: () => void;  // 重置测试状态
+  setTestState: (isInTest: boolean, testPassed: boolean, testChatHistory: ChatMessage[], testCredential: string) => void;
+
+  // 项目切换相关
+  resetAllProgress: () => void;  // 重置所有进度（切换项目时使用）
+
   getCurrentForm: () => FormConfig | undefined;
 }
 
@@ -57,6 +78,11 @@ export const useChatStore = create<ChatState>()(
       stepProgress: {},
       previousSummaries: [],
       needsConfirmation: false,
+      // 测试阶段初始状态
+      isInTest: false,
+      testPassed: false,
+      testChatHistory: [],
+      testCredential: "",
 
       setForms: (forms) => set({ forms }),
 
@@ -74,6 +100,11 @@ export const useChatStore = create<ChatState>()(
           chatHistory: progress?.chatHistory || [],
           extractedFields: progress?.extractedFields || {},
           needsConfirmation: false,
+          // 加载测试状态
+          isInTest: progress?.isInTest || false,
+          testPassed: progress?.testPassed || false,
+          testChatHistory: progress?.testChatHistory || [],
+          testCredential: progress?.testCredential || "",
         });
       },
 
@@ -87,6 +118,10 @@ export const useChatStore = create<ChatState>()(
           chatHistory: newHistory,
           isConfirmed: newStepProgress[state.currentFormId]?.isConfirmed || false,
           summary: newStepProgress[state.currentFormId]?.summary || "",
+          isInTest: newStepProgress[state.currentFormId]?.isInTest || false,
+          testPassed: newStepProgress[state.currentFormId]?.testPassed || false,
+          testChatHistory: newStepProgress[state.currentFormId]?.testChatHistory || [],
+          testCredential: newStepProgress[state.currentFormId]?.testCredential || "",
         };
         return {
           chatHistory: newHistory,
@@ -102,6 +137,10 @@ export const useChatStore = create<ChatState>()(
           chatHistory: state.chatHistory,
           isConfirmed: newStepProgress[state.currentFormId]?.isConfirmed || false,
           summary: newStepProgress[state.currentFormId]?.summary || "",
+          isInTest: newStepProgress[state.currentFormId]?.isInTest || false,
+          testPassed: newStepProgress[state.currentFormId]?.testPassed || false,
+          testChatHistory: newStepProgress[state.currentFormId]?.testChatHistory || [],
+          testCredential: newStepProgress[state.currentFormId]?.testCredential || "",
         };
         return {
           extractedFields: fields,
@@ -118,6 +157,10 @@ export const useChatStore = create<ChatState>()(
           chatHistory: state.chatHistory,
           isConfirmed: newStepProgress[state.currentFormId]?.isConfirmed || false,
           summary: newStepProgress[state.currentFormId]?.summary || "",
+          isInTest: newStepProgress[state.currentFormId]?.isInTest || false,
+          testPassed: newStepProgress[state.currentFormId]?.testPassed || false,
+          testChatHistory: newStepProgress[state.currentFormId]?.testChatHistory || [],
+          testCredential: newStepProgress[state.currentFormId]?.testCredential || "",
         };
         return {
           extractedFields: newFields,
@@ -142,6 +185,11 @@ export const useChatStore = create<ChatState>()(
             chatHistory: data.chat_history || data.chatHistory || [],
             isConfirmed: data.is_confirmed ?? data.isConfirmed ?? false,
             summary: data.summary || "",
+            // 测试相关状态
+            isInTest: data.is_in_test ?? data.isInTest ?? false,
+            testPassed: data.test_passed ?? data.testPassed ?? false,
+            testChatHistory: data.test_chat_history || data.testChatHistory || [],
+            testCredential: data.test_credential || data.testCredential || "",
           };
         }
         set({ currentStep, completedSteps, stepProgress });
@@ -154,6 +202,11 @@ export const useChatStore = create<ChatState>()(
           chatHistory: (data as any).chat_history || data.chatHistory || [],
           isConfirmed: (data as any).is_confirmed ?? data.isConfirmed ?? false,
           summary: data.summary || "",
+          // 测试相关状态
+          isInTest: (data as any).is_in_test ?? data.isInTest ?? false,
+          testPassed: (data as any).test_passed ?? data.testPassed ?? false,
+          testChatHistory: (data as any).test_chat_history || data.testChatHistory || [],
+          testCredential: (data as any).test_credential || data.testCredential || "",
         };
 
         return {
@@ -165,6 +218,10 @@ export const useChatStore = create<ChatState>()(
           ...(formId === state.currentFormId ? {
             chatHistory: normalizedData.chatHistory,
             extractedFields: normalizedData.extractedFields,
+            isInTest: normalizedData.isInTest,
+            testPassed: normalizedData.testPassed,
+            testChatHistory: normalizedData.testChatHistory,
+            testCredential: normalizedData.testCredential,
           } : {}),
         };
       }),
@@ -213,9 +270,111 @@ export const useChatStore = create<ChatState>()(
           set({
             chatHistory: progress.chatHistory,
             extractedFields: progress.extractedFields,
+            isInTest: progress.isInTest || false,
+            testPassed: progress.testPassed || false,
+            testChatHistory: progress.testChatHistory || [],
+            testCredential: progress.testCredential || "",
           });
         }
       },
+
+      // 测试阶段方法
+      startTest: () => set((state) => {
+        const newStepProgress = { ...state.stepProgress };
+        newStepProgress[state.currentFormId] = {
+          ...newStepProgress[state.currentFormId],
+          isInTest: true,
+          testPassed: false,
+          testChatHistory: [],
+          testCredential: "",
+        };
+        return {
+          isInTest: true,
+          testPassed: false,
+          testChatHistory: [],
+          testCredential: "",
+          stepProgress: newStepProgress,
+        };
+      }),
+
+      addTestMessage: (message) => set((state) => {
+        const newTestHistory = [...state.testChatHistory, message];
+        const newStepProgress = { ...state.stepProgress };
+        newStepProgress[state.currentFormId] = {
+          ...newStepProgress[state.currentFormId],
+          testChatHistory: newTestHistory,
+        };
+        return {
+          testChatHistory: newTestHistory,
+          stepProgress: newStepProgress,
+        };
+      }),
+
+      setTestPassed: (passed, credential) => set((state) => {
+        const newStepProgress = { ...state.stepProgress };
+        newStepProgress[state.currentFormId] = {
+          ...newStepProgress[state.currentFormId],
+          testPassed: passed,
+          testCredential: credential,
+        };
+        return {
+          testPassed: passed,
+          testCredential: credential,
+          stepProgress: newStepProgress,
+        };
+      }),
+
+      resetTest: () => set((state) => {
+        const newStepProgress = { ...state.stepProgress };
+        newStepProgress[state.currentFormId] = {
+          ...newStepProgress[state.currentFormId],
+          isInTest: false,
+          testPassed: false,
+          testChatHistory: [],
+          testCredential: "",
+        };
+        return {
+          isInTest: false,
+          testPassed: false,
+          testChatHistory: [],
+          testCredential: "",
+          stepProgress: newStepProgress,
+        };
+      }),
+
+      setTestState: (isInTest, testPassed, testChatHistory, testCredential) => set((state) => {
+        const newStepProgress = { ...state.stepProgress };
+        newStepProgress[state.currentFormId] = {
+          ...newStepProgress[state.currentFormId],
+          isInTest,
+          testPassed,
+          testChatHistory,
+          testCredential,
+        };
+        return {
+          isInTest,
+          testPassed,
+          testChatHistory,
+          testCredential,
+          stepProgress: newStepProgress,
+        };
+      }),
+
+      // 重置所有进度（切换项目时使用）
+      resetAllProgress: () => set({
+        currentFormId: 1,
+        chatHistory: [],
+        extractedFields: {},
+        currentStep: 1,
+        completedSteps: [],
+        stepProgress: {},
+        previousSummaries: [],
+        needsConfirmation: false,
+        isInTest: false,
+        testPassed: false,
+        testChatHistory: [],
+        testCredential: "",
+      }),
 
       getCurrentForm: () => {
         const { forms, currentFormId } = get();
@@ -229,6 +388,7 @@ export const useChatStore = create<ChatState>()(
         currentStep: state.currentStep,
         completedSteps: state.completedSteps,
         stepProgress: state.stepProgress,
+        needsConfirmation: state.needsConfirmation,
       }),
     }
   )

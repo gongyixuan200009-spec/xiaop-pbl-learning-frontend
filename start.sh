@@ -1,6 +1,6 @@
 #\!/bin/bash
 
-# 小P学习助手 v2 启动脚本
+# 工小助学习助手 v2 启动脚本
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 BACKEND_DIR="$SCRIPT_DIR/backend"
@@ -38,7 +38,7 @@ start_backend() {
     pip install -r requirements.txt -q
     
     # 启动后端
-    nohup python -m uvicorn main:app --host 0.0.0.0 --port 8000 > backend.log 2>&1 &
+    nohup python -m uvicorn main:app --host 0.0.0.0 --port 8000 > /tmp/backend.log 2>&1 &
     echo $\! > backend.pid
     log_info "后端已启动 (PID: $(cat backend.pid)) - http://localhost:8000"
 }
@@ -54,7 +54,7 @@ start_frontend() {
     fi
     
     # 启动前端
-    nohup npm run dev -- -p 3000 > frontend.log 2>&1 &
+    cd frontend/out && nohup http-server . -p 8504 > /tmp/frontend.log 2>&1 &
     echo $\! > frontend.pid
     log_info "前端已启动 (PID: $(cat frontend.pid)) - http://localhost:3000"
 }

@@ -34,7 +34,7 @@ export function TaskProgress({ fields, extractedFields, isExpanded: defaultExpan
           </div>
           <div>
             <span className="font-semibold text-[#1d1d1f]" style={{ fontSize: "var(--text-xs)" }}>
-              小P记下了这些
+              工小助记下了这些
             </span>
             <span className="text-[#86868b]" style={{ fontSize: "var(--text-xs)", marginLeft: "var(--space-xs)" }}>
               ({completedCount}/{fields.length})
@@ -76,13 +76,11 @@ export function TaskProgress({ fields, extractedFields, isExpanded: defaultExpan
             className="overflow-hidden"
           >
             <div
-              className="overflow-y-auto"
               style={{
                 padding: "0 var(--space-md) var(--space-md)",
                 display: "flex",
-                flexDirection: "column",
+                flexDirection: "row",
                 gap: "var(--space-xs)",
-                maxHeight: "35vh"
               }}
             >
               {fields.map((field, index) => {
@@ -92,57 +90,45 @@ export function TaskProgress({ fields, extractedFields, isExpanded: defaultExpan
                 return (
                   <motion.div
                     key={field}
-                    initial={{ x: -20, opacity: 0 }}
-                    animate={{ x: 0, opacity: 1 }}
+                    initial={{ y: -10, opacity: 0 }}
+                    animate={{ y: 0, opacity: 1 }}
                     transition={{ delay: index * 0.05 }}
                     className={cn(
-                      "transition-all rounded-vw-md",
+                      "flex flex-col items-center justify-center rounded-vw-md transition-all flex-1 min-w-0",
                       isCompleted
                         ? "bg-[#34c759]/10"
                         : "bg-[#f5f5f7]"
                     )}
-                    style={{
-                      padding: "var(--space-sm)",
-                      borderLeft: `clamp(2px, 0.5vw, 3px) solid ${isCompleted ? '#34c759' : '#d2d2d7'}`
-                    }}
+                    style={{ padding: "var(--space-sm)", gap: "var(--space-xs)" }}
                   >
-                    <div className="flex items-center" style={{ gap: "var(--space-xs)" }}>
-                      {isCompleted ? (
-                        <div
-                          className="rounded-full bg-[#34c759] flex items-center justify-center"
-                          style={{ width: "var(--icon-sm)", height: "var(--icon-sm)" }}
-                        >
-                          <CheckCircle style={{ width: "60%", height: "60%" }} className="text-white" />
-                        </div>
-                      ) : (
-                        <div
-                          className="rounded-full border-2 border-[#d2d2d7] flex items-center justify-center"
-                          style={{ width: "var(--icon-sm)", height: "var(--icon-sm)" }}
-                        >
-                          <Circle style={{ width: "50%", height: "50%" }} className="text-[#d2d2d7]" />
-                        </div>
+                    {isCompleted ? (
+                      <CheckCircle
+                        className="text-[#34c759] flex-shrink-0"
+                        style={{ width: "var(--icon-md)", height: "var(--icon-md)" }}
+                      />
+                    ) : (
+                      <Circle
+                        className="text-[#86868b] flex-shrink-0"
+                        style={{ width: "var(--icon-md)", height: "var(--icon-md)" }}
+                      />
+                    )}
+                    <span
+                      className={cn(
+                        "font-medium text-center",
+                        isCompleted ? "text-[#1d1d1f]" : "text-[#86868b]"
                       )}
+                      style={{ fontSize: "var(--text-xs)" }}
+                    >
+                      {field}
+                    </span>
+                    {isCompleted && value && (
                       <span
-                        className={cn(
-                          "font-medium",
-                          isCompleted ? "text-[#1d1d1f]" : "text-[#86868b]"
-                        )}
-                        style={{ fontSize: "var(--text-xs)" }}
-                      >
-                        {field}
-                      </span>
-                    </div>
-                    {isCompleted && (
-                      <p
-                        className="text-[#1d1d1f] line-clamp-2"
-                        style={{
-                          marginTop: "var(--space-xs)",
-                          paddingLeft: "calc(var(--icon-sm) + var(--space-xs))",
-                          fontSize: "var(--text-xs)"
-                        }}
+                        className="text-[#34c759] w-full text-center break-words"
+                        style={{ fontSize: "clamp(10px, 2.5vw, 12px)" }}
+                        title={value}
                       >
                         {value}
-                      </p>
+                      </span>
                     )}
                   </motion.div>
                 );

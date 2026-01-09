@@ -1,0 +1,227 @@
+"use client";
+
+import { useEffect, useRef, useState } from "react";
+import { motion, AnimatePresence } from "framer-motion";
+import { MessageBubble } from "@/components/chat/MessageBubble";
+import { ChatInput } from "@/components/chat/ChatInput";
+import { useSocraticStore } from "@/store/socraticStore";
+import { useAuthStore } from "@/store/authStore";
+import { socraticAPI } from "@/lib/api";
+import { Loader2, CheckCircle, ArrowRight, Trophy } from "lucide-react";
+
+export function SocraticChat() {
+  const { token } = useAuthStore();
+  const {
+    currentModule,
+    currentProgress,
+    messages,
+    isStreaming,
+    streamingContent,
+    setMessages,
+    addMessage,
+    setIsStreaming,
+    setStreamingContent,
+    appendStreamingContent,
+    setCurrentProgress,
+  } = useSocraticStore();
+
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const [showCompletionMessage, setShowCompletionMessage] = useState(false);
+  const [completedQuestionId, setCompletedQuestionId] = useState<number | null>(null);
+
+  const currentQuestion = currentModule?.questions[currentProgress?.current_question_index || 0];
+  const totalQuestions = currentModule?.questions.length || 0;
+  const currentQuestionNumber = (currentProgress?.current_question_index || 0) + 1;
+
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages, streamingContent]);
+
+  const handleSend = async (message: string, imageUrl?: string) => {
+    if (!token || !currentModule || !currentProgress || isStreaming) return;
+
+    addMessage({ role: "user", content: message, image_url: imageUrl });
+    setIsStreaming(true);
+    setStreamingContent("");
+
+    try {
+      await socraticAPI.sendMessageStream(
+        token,
+        currentModule.id,
+        message,
+        messages,
+        {
+          onThinking: (msg) => {
+            console.log("[Thinking]", msg);
+          },
+          onContent: (content) => {
+            appendStreamingContent(content);
+          },
+          onQuestionCompleted: (questionId, nextQuestion) => {
+            setCompletedQuestionId(questionId);
+            setShowCompletionMessage(true);
+            setTimeout(() => setShowCompletionMessage(false), 3000);
+            
+            // 更新进度
+            if (currentProgress) {
+              const newProgress = { ...currentProgress };
+              newProgress.questions_completed.push(questionId);
+              if (nextQuestion) {
+                newProgress.current_question_index += 1;
+              }
+              setCurrentProgress(newProgress);
+            }
+          },
+          onModuleCompleted: (msg) => {
+            // 模块完成
+            if (currentProgress) {
+              const newProgress = { ...currentProgress };
+              newProgress.is_completed = true;
+              setCurrentProgress(newProgress);
+            }
+          },
+          onDone: (fullReply) => {
+            setStreamingContent("");
+            setIsStreaming(false);
+            addMessage({ role: "assistant", content: fullReply });
+          },
+          onError: (error) => {
+            console.error("发送消息失败:", error);
+            setStreamingContent("");
+            setIsStreaming(false);
+            addMessage({
+              role: "assistant",
+              content: "抱歉,发生了错误: " + error.message,
+            });
+          },
+        }
+      );
+    } catch (error) {
+      console.error("发送消息失败:", error);
+      setStreamingContent("");
+      setIsStreaming(false);
+      addMessage({
+        role: "assistant",
+        content: "抱歉,发生了错误,请稍后重试。",
+      });
+    }
+  };
+
+  if (!currentModule || !currentProgress) {
+    return (
+      <div className="flex items-center justify-center h-full">
+        <Loader2 className="animate-spin" />
+      </div>
+    );
+  }
+
+  const isModuleCompleted = currentProgress.is_completed;
+
+  return (
+    <div className="flex flex-col h-full">
+      {/* 问题进度头部 */}
+      <div className="bg-white border-b border-gray-200 px-6 py-4">
+        <div className="max-w-4xl mx-auto">
+          <div className="flex items-center justify-between mb-2">
+            <h2 className="text-lg font-semibold text-gray-900">
+              {currentModule.name}
+            </h2>
+            {isModuleCompleted ? (
+              <div className="flex items-center gap-2 text-green-600">
+                <Trophy className="w-5 h-5" />
+                <span className="font-medium">已完成</span>
+              </div>
+            ) : (
+              <span className="text-sm text-gray-500">
+                问题 {currentQuestionNumber}/{totalQuestions}
+              </span>
+            )}
+          </div>
+          
+          {!isModuleCompleted && (
+            <div className="w-full bg-gray-200 rounded-full h-2">
+              <div
+                className="bg-blue-600 h-2 rounded-full transition-all duration-500"
+                style={{
+                  width: `${(currentProgress.questions_completed.length / totalQuestions) * 100}%`,
+                }}
+              />
+            </div>
+          )}
+          
+          {!isModuleCompleted && currentQuestion && (
+            <p className="mt-3 text-sm text-gray-600">
+              当前问题: {currentQuestion.question}
+            </p>
+          )}
+        </div>
+      </div>
+
+      {/* 问题完成提示 */}
+      <AnimatePresence>
+        {showCompletionMessage && (
+          <motion.div
+            initial={{ opacity: 0, y: -20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -20 }}
+            className="fixed top-20 left-1/2 transform -translate-x-1/2 z-50 bg-green-500 text-white px-6 py-3 rounded-lg shadow-lg flex items-center gap-2"
+          >
+            <CheckCircle className="w-5 h-5" />
+            <span className="font-medium">问题完成! 继续加油!</span>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* 消息列表 */}
+      <div className="flex-1 overflow-y-auto px-6 py-4">
+        <div className="max-w-4xl mx-auto space-y-4">
+          {messages.map((msg, index) => (
+            <MessageBubble
+              key={index}
+              role={msg.role} content={msg.content} imageUrl={msg.image_url}
+              isNew={false}
+            />
+          ))}
+          
+          {isStreaming && streamingContent && (
+            <MessageBubble
+              role="assistant" content={streamingContent}
+              isNew={false}
+            />
+          )}
+          
+          {isModuleCompleted && (
+            <motion.div
+              initial={{ opacity: 0, scale: 0.9 }}
+              animate={{ opacity: 1, scale: 1 }}
+              className="bg-gradient-to-r from-green-50 to-blue-50 rounded-2xl p-6 text-center border border-green-200"
+            >
+              <Trophy className="w-16 h-16 mx-auto text-green-600 mb-4" />
+              <h3 className="text-2xl font-bold text-gray-900 mb-2">
+                恭喜你完成学习!
+              </h3>
+              <p className="text-gray-600">
+                你已经掌握了本模块的所有知识点
+              </p>
+            </motion.div>
+          )}
+          
+          <div ref={messagesEndRef} />
+        </div>
+      </div>
+
+      {/* 输入框 */}
+      {!isModuleCompleted && (
+        <div className="border-t border-gray-200 bg-white px-6 py-4">
+          <div className="max-w-4xl mx-auto">
+            <ChatInput
+              onSend={handleSend}
+              disabled={isStreaming}
+              placeholder="输入你的回答..."
+            />
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

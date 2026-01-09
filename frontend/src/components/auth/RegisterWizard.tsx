@@ -14,10 +14,23 @@ interface RegisterWizardProps {
 const STEPS = [
   { id: "account", title: "设置账号" },
   { id: "grade", title: "年级", question: "你现在读几年级呀？", options: ["四年级", "五年级", "六年级", "初一", "初二", "初三", "高一", "高二", "高三"] },
-  { id: "gender", title: "称呼", question: "小P该怎么称呼你呢？", options: ["男生", "女生", "保密"] },
-  { id: "math", title: "数学成绩", question: "你的数学成绩大概在哪个区间呢？📊", options: ["0-90分", "90-110分", "110-135分", "136-150分"] },
+  { id: "gender", title: "称呼", question: "工小助该怎么称呼你呢？", options: ["男生", "女生", "保密"] },
+  { id: "math", title: "数学成绩", question: "你的数学成绩大概在哪个档次呢？📊", options: ["A (优秀)", "B (良好)", "C (中等)", "D (待提升)"] },
   { id: "science", title: "理科感受", question: "在理科学习中，你的感受是？🔬", options: ["得心应手，很有自信", "基础尚可，偶尔吃力", "比较困难，需要帮助"] },
 ];
+
+// 根据年级自动推断年龄段
+const GRADE_TO_AGE_GROUP: Record<string, string> = {
+  "四年级": "elementary",
+  "五年级": "elementary",
+  "六年级": "elementary",
+  "初一": "middle_school",
+  "初二": "middle_school",
+  "初三": "middle_school",
+  "高一": "high_school",
+  "高二": "high_school",
+  "高三": "high_school",
+};
 
 export function RegisterWizard({ onSuccess }: RegisterWizardProps) {
   const [step, setStep] = useState(0);
@@ -28,6 +41,7 @@ export function RegisterWizard({ onSuccess }: RegisterWizardProps) {
     gender: "",
     math_score: "",
     science_feeling: "",
+    age_group: "",
   });
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
@@ -36,6 +50,14 @@ export function RegisterWizard({ onSuccess }: RegisterWizardProps) {
   
   const currentStep = STEPS[step];
   const progress = ((step + 1) / STEPS.length) * 100;
+
+  // 根据年级动态调整问题文字：小学用"科学"，中学/高中用"理科"
+  const getQuestionText = () => {
+    if (currentStep.id === "science" && ["四年级", "五年级", "六年级"].includes(profile.grade)) {
+      return "在科学学习中，你的感受是？🔬";
+    }
+    return currentStep.question;
+  };
   
   const handleAccountNext = () => {
     if (!username || !password) {
@@ -53,17 +75,25 @@ export function RegisterWizard({ onSuccess }: RegisterWizardProps) {
       math: "math_score",
       science: "science_feeling",
     };
-    
+
     const field = fieldMap[currentStep.id];
     if (field) {
-      setProfile((prev) => ({ ...prev, [field]: option }));
-    }
-    
-    if (step < STEPS.length - 1) {
-      setStep(step + 1);
-    } else {
-      // 完成注册
-      await handleRegister({ ...profile, [field]: option });
+      // 如果是选择年级，同时自动设置 age_group
+      let updatedProfile = { ...profile, [field]: option };
+      if (currentStep.id === "grade") {
+        const ageGroup = GRADE_TO_AGE_GROUP[option];
+        if (ageGroup) {
+          updatedProfile = { ...updatedProfile, age_group: ageGroup };
+        }
+      }
+
+      if (step < STEPS.length - 1) {
+        setProfile(updatedProfile);
+        setStep(step + 1);
+      } else {
+        // 完成注册
+        await handleRegister(updatedProfile);
+      }
     }
   };
   
@@ -111,7 +141,7 @@ export function RegisterWizard({ onSuccess }: RegisterWizardProps) {
             className="space-y-4"
           >
             <div className="bg-blue-50 rounded-lg p-4 text-blue-700 text-sm">
-              💬 小P：你好！我是小P，你的AI学习伙伴！让我们先设置你的账号~
+              💬 工小助：你好！我是工小助，你的AI学习伙伴！让我们先设置你的账号~
             </div>
             
             <div className="space-y-3">
@@ -162,7 +192,7 @@ export function RegisterWizard({ onSuccess }: RegisterWizardProps) {
             className="space-y-4"
           >
             <div className="bg-blue-50 rounded-lg p-4 text-blue-700 text-sm">
-              💬 小P：{currentStep.question}
+              💬 工小助：{getQuestionText()}
             </div>
             
             <div className="grid grid-cols-2 gap-3">

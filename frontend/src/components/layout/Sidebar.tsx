@@ -3,9 +3,10 @@
 import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import Image from "next/image";
-import { LogOut, CheckCircle, Circle, Menu, X, ChevronRight, Lock } from "lucide-react";
+import { LogOut, CheckCircle, Circle, Menu, X, ChevronRight, Lock, FolderPlus, ChevronDown, Trash2, Edit2 } from "lucide-react";
 import { useAuthStore } from "@/store/authStore";
 import { useChatStore } from "@/store/chatStore";
+import { projectAPI, Project } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 interface SidebarProps {
@@ -13,7 +14,7 @@ interface SidebarProps {
 }
 
 export function Sidebar({ onLogout }: SidebarProps) {
-  const { user, logout } = useAuthStore();
+  const { token, user, logout } = useAuthStore();
   const {
     forms,
     currentFormId,
@@ -24,10 +25,19 @@ export function Sidebar({ onLogout }: SidebarProps) {
     stepProgress,
     canAccessStep,
     isStepConfirmed,
+    resetAllProgress,
   } = useChatStore();
   const [isOpen, setIsOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
   const [showLockedAlert, setShowLockedAlert] = useState(false);
+
+  // 项目相关状态
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [currentProjectId, setCurrentProjectId] = useState<string>("");
+  const [showProjectMenu, setShowProjectMenu] = useState(false);
+  const [isCreatingProject, setIsCreatingProject] = useState(false);
+  const [newProjectName, setNewProjectName] = useState("");
+  const [isLoadingProjects, setIsLoadingProjects] = useState(false);
 
   useEffect(() => {
     const checkMobile = () => {
@@ -37,6 +47,24 @@ export function Sidebar({ onLogout }: SidebarProps) {
     window.addEventListener("resize", checkMobile);
     return () => window.removeEventListener("resize", checkMobile);
   }, []);
+
+  // 加载项目列表
+  useEffect(() => {
+    const loadProjects = async () => {
+      if (!token) return;
+      setIsLoadingProjects(true);
+      try {
+        const response = await projectAPI.listProjects(token);
+        setProjects(response.projects);
+        setCurrentProjectId(response.current_project_id);
+      } catch (error) {
+        console.error("加载项目列表失败:", error);
+      } finally {
+        setIsLoadingProjects(false);
+      }
+    };
+    loadProjects();
+  }, [token]);
 
   const handleLogout = () => {
     logout();
@@ -56,6 +84,74 @@ export function Sidebar({ onLogout }: SidebarProps) {
     }
   };
 
+  // 创建新项目
+  const handleCreateProject = async () => {
+    if (!token || !newProjectName.trim()) return;
+
+    try {
+      const response = await projectAPI.createProject(token, newProjectName.trim());
+      if (response.success) {
+        // 更新项目列表
+        setProjects(prev => [response.project, ...prev.map(p => ({ ...p, is_current: false }))]);
+        setCurrentProjectId(response.project.id);
+        setNewProjectName("");
+        setIsCreatingProject(false);
+        setShowProjectMenu(false);
+        // 重置当前进度以加载新项目
+        resetAllProgress();
+        // 刷新页面以加载新项目数据
+        window.location.reload();
+      }
+    } catch (error) {
+      console.error("创建项目失败:", error);
+    }
+  };
+
+  // 切换项目
+  const handleSwitchProject = async (projectId: string) => {
+    if (!token || projectId === currentProjectId) return;
+
+    try {
+      const response = await projectAPI.switchProject(token, projectId);
+      if (response.success) {
+        setCurrentProjectId(projectId);
+        setProjects(prev => prev.map(p => ({ ...p, is_current: p.id === projectId })));
+        setShowProjectMenu(false);
+        // 重置当前进度以加载新项目
+        resetAllProgress();
+        // 刷新页面以加载新项目数据
+        window.location.reload();
+      }
+    } catch (error) {
+      console.error("切换项目失败:", error);
+    }
+  };
+
+  // 删除项目
+  const handleDeleteProject = async (projectId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!token) return;
+
+    if (!window.confirm("确定要删除这个项目吗？所有进度将丢失。")) return;
+
+    try {
+      const response = await projectAPI.deleteProject(token, projectId);
+      if (response.success) {
+        // 重新加载项目列表
+        const listResponse = await projectAPI.listProjects(token);
+        setProjects(listResponse.projects);
+        setCurrentProjectId(listResponse.current_project_id);
+        // 如果删除的是当前项目，刷新页面
+        if (projectId === currentProjectId) {
+          window.location.reload();
+        }
+      }
+    } catch (error: any) {
+      alert(error.message || "删除项目失败");
+    }
+  };
+
+  const currentProject = projects.find(p => p.id === currentProjectId);
   const currentForm = forms.find((f) => f.id === currentFormId);
 
   // Mobile header
@@ -85,7 +181,7 @@ export function Sidebar({ onLogout }: SidebarProps) {
           >
             <Image
               src="/avatar.png"
-              alt="小P"
+              alt="工小助"
               width={40}
               height={40}
               className="object-cover w-full h-full"
@@ -95,7 +191,7 @@ export function Sidebar({ onLogout }: SidebarProps) {
             className="font-semibold text-[#1d1d1f] truncate"
             style={{ fontSize: "var(--text-sm)", maxWidth: "45vw" }}
           >
-            {currentForm?.name || "小P学习助手"}
+            {currentForm?.name || "工小助学习助手"}
           </span>
         </div>
         <div style={{ width: "clamp(32px, 8vw, 40px)" }} />
@@ -118,20 +214,184 @@ export function Sidebar({ onLogout }: SidebarProps) {
           >
             <Image
               src="/avatar.png"
-              alt="小P"
+              alt="工小助"
               width={56}
               height={56}
               className="object-cover w-full h-full"
             />
           </div>
-          <div className="min-w-0">
+          <div className="min-w-0 flex-1">
             <h3 className="font-semibold text-[#1d1d1f]" style={{ fontSize: "var(--text-lg)" }}>
-              小P陪你学习
+              工小助陪你学习
             </h3>
             <p className="text-[#86868b] truncate" style={{ fontSize: "var(--text-xs)", marginTop: "2px" }}>
               {user?.username}
             </p>
           </div>
+        </div>
+
+        {/* 项目选择器 */}
+        <div className="relative" style={{ marginTop: "var(--space-md)" }}>
+          <button
+            onClick={() => setShowProjectMenu(!showProjectMenu)}
+            className="w-full flex items-center justify-between bg-[#f5f5f7] hover:bg-[#e8e8ed] rounded-vw-md transition-colors"
+            style={{ padding: "var(--space-sm)" }}
+          >
+            <div className="flex items-center" style={{ gap: "var(--space-xs)" }}>
+              <div
+                className="rounded-md bg-[#0071e3] flex items-center justify-center"
+                style={{ width: "var(--icon-md)", height: "var(--icon-md)" }}
+              >
+                <span className="text-white font-bold" style={{ fontSize: "var(--text-xs)" }}>
+                  {currentProject?.name?.[0]?.toUpperCase() || "P"}
+                </span>
+              </div>
+              <div className="text-left min-w-0">
+                <p className="font-medium text-[#1d1d1f] truncate" style={{ fontSize: "var(--text-sm)" }}>
+                  {currentProject?.name || "默认项目"}
+                </p>
+                <p className="text-[#86868b]" style={{ fontSize: "var(--text-xs)" }}>
+                  进度: {currentProject?.completed_steps?.length || 0} 阶段完成
+                </p>
+              </div>
+            </div>
+            <ChevronDown
+              className={cn(
+                "text-[#86868b] transition-transform flex-shrink-0",
+                showProjectMenu && "rotate-180"
+              )}
+              style={{ width: "var(--icon-sm)", height: "var(--icon-sm)" }}
+            />
+          </button>
+
+          {/* 提示文字 */}
+          {!showProjectMenu && (
+            <p
+              className="text-center text-[#86868b] cursor-pointer hover:text-[#0071e3] transition-colors"
+              style={{ fontSize: "var(--text-xs)", marginTop: "var(--space-xs)" }}
+              onClick={() => setShowProjectMenu(true)}
+            >
+              点击此处切换项目/新建项目
+            </p>
+          )}
+
+          {/* 项目下拉菜单 */}
+          <AnimatePresence>
+            {showProjectMenu && (
+              <motion.div
+                initial={{ opacity: 0, y: -10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -10 }}
+                className="absolute left-0 right-0 mt-1 bg-white rounded-vw-md shadow-xl border border-[#d2d2d7]/50 overflow-hidden z-50"
+                style={{ maxHeight: "50vh" }}
+              >
+                {/* 新建项目 */}
+                {isCreatingProject ? (
+                  <div className="border-b border-[#d2d2d7]/30" style={{ padding: "var(--space-sm)" }}>
+                    <input
+                      type="text"
+                      value={newProjectName}
+                      onChange={(e) => setNewProjectName(e.target.value)}
+                      placeholder="输入项目名称..."
+                      className="w-full bg-[#f5f5f7] rounded-md outline-none focus:ring-2 focus:ring-[#0071e3]/30 text-[#1d1d1f]"
+                      style={{ padding: "var(--space-xs) var(--space-sm)", fontSize: "var(--text-sm)" }}
+                      autoFocus
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") handleCreateProject();
+                        if (e.key === "Escape") {
+                          setIsCreatingProject(false);
+                          setNewProjectName("");
+                        }
+                      }}
+                    />
+                    <div className="flex justify-end" style={{ gap: "var(--space-xs)", marginTop: "var(--space-xs)" }}>
+                      <button
+                        onClick={() => {
+                          setIsCreatingProject(false);
+                          setNewProjectName("");
+                        }}
+                        className="text-[#86868b] hover:text-[#1d1d1f] transition-colors"
+                        style={{ fontSize: "var(--text-xs)", padding: "var(--space-xs)" }}
+                      >
+                        取消
+                      </button>
+                      <button
+                        onClick={handleCreateProject}
+                        disabled={!newProjectName.trim()}
+                        className="bg-[#0071e3] text-white rounded-md disabled:opacity-50 hover:bg-[#0077ED] transition-colors"
+                        style={{ fontSize: "var(--text-xs)", padding: "var(--space-xs) var(--space-sm)" }}
+                      >
+                        创建
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => setIsCreatingProject(true)}
+                    className="w-full flex items-center text-[#0071e3] hover:bg-[#f5f5f7] transition-colors border-b border-[#d2d2d7]/30"
+                    style={{ gap: "var(--space-xs)", padding: "var(--space-sm)" }}
+                  >
+                    <FolderPlus style={{ width: "var(--icon-sm)", height: "var(--icon-sm)" }} />
+                    <span style={{ fontSize: "var(--text-sm)" }}>新建项目</span>
+                  </button>
+                )}
+
+                {/* 项目列表 */}
+                <div className="overflow-y-auto" style={{ maxHeight: "35vh" }}>
+                  {projects.map((project) => (
+                    <div
+                      key={project.id}
+                      onClick={() => handleSwitchProject(project.id)}
+                      className={cn(
+                        "flex items-center justify-between cursor-pointer transition-colors",
+                        project.id === currentProjectId
+                          ? "bg-[#0071e3]/10"
+                          : "hover:bg-[#f5f5f7]"
+                      )}
+                      style={{ padding: "var(--space-sm)" }}
+                    >
+                      <div className="flex items-center min-w-0" style={{ gap: "var(--space-xs)" }}>
+                        <div
+                          className={cn(
+                            "rounded-md flex items-center justify-center flex-shrink-0",
+                            project.id === currentProjectId ? "bg-[#0071e3]" : "bg-[#86868b]"
+                          )}
+                          style={{ width: "var(--icon-md)", height: "var(--icon-md)" }}
+                        >
+                          <span className="text-white font-bold" style={{ fontSize: "var(--text-xs)" }}>
+                            {project.name?.[0]?.toUpperCase() || "P"}
+                          </span>
+                        </div>
+                        <div className="min-w-0">
+                          <p
+                            className={cn(
+                              "font-medium truncate",
+                              project.id === currentProjectId ? "text-[#0071e3]" : "text-[#1d1d1f]"
+                            )}
+                            style={{ fontSize: "var(--text-sm)" }}
+                          >
+                            {project.name}
+                          </p>
+                          <p className="text-[#86868b]" style={{ fontSize: "var(--text-xs)" }}>
+                            {project.completed_steps?.length || 0} 阶段完成
+                          </p>
+                        </div>
+                      </div>
+                      {/* 删除按钮（不能删除当前项目且只有一个项目时不显示） */}
+                      {projects.length > 1 && (
+                        <button
+                          onClick={(e) => handleDeleteProject(project.id, e)}
+                          className="text-[#86868b] hover:text-[#ff3b30] transition-colors p-1 rounded-md hover:bg-[#ff3b30]/10 flex-shrink-0"
+                        >
+                          <Trash2 style={{ width: "var(--icon-xs)", height: "var(--icon-xs)" }} />
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
         </div>
 
         {user?.profile && (

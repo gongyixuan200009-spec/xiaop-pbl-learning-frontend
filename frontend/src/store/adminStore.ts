@@ -92,7 +92,11 @@ export const useAdminStore = create<AdminState>()(
           description: "请输入角色描述",
           user_description: "请输入用户看到的描述",
           fields: ["字段1"],
-          extraction_prompt: "",  // 新增：默认使用系统默认规则
+          extraction_prompt: "",
+          age_prompts: {},
+          test_enabled: false,
+          test_prompt: "",
+          test_pass_pattern: "",
         };
         set({ forms: [...forms, newForm], selectedFormId: newForm.id });
       },

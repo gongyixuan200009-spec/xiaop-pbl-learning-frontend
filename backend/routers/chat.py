@@ -9,12 +9,14 @@ from datetime import datetime
 
 from models.schemas import (
     ChatRequest, ChatResponse, ProgressResponse, ChatMessage,
-    StepConfirmRequest, StepConfirmResponse, UserProgressResponse
+    StepConfirmRequest, StepConfirmResponse, UserProgressResponse,
+    TestStartRequest, TestStartResponse, TestMessageRequest
 )
 from services.llm_service import extract_fields, generate_reply, generate_reply_stream, generate_summary
 from services.single_agent_service import get_chat_mode, generate_single_agent_stream
+from services.pipeline_service import get_pipeline, PipelineExecutor
 from services.progress_service import progress_service
-from config import load_form_config, DATA_DIR
+from config import load_form_config, DATA_DIR, get_active_pipeline_id
 import logging
 
 logger = logging.getLogger("chat_router")
@@ -41,17 +43,25 @@ async def get_form(form_id: int):
 async def get_user_progress(username: str = Depends(get_current_user)):
     """获取用户的整体进度"""
     progress = progress_service.get_user_progress(username)
+
+    # 转换 step_data 并包含测试状态
+    transformed_step_data = {}
+    for k, v in progress["step_data"].items():
+        test_state = v.get("test_state", {})
+        transformed_step_data[int(k)] = {
+            "extracted_fields": v.get("extracted_fields", {}),
+            "is_confirmed": v.get("is_confirmed", False),
+            "summary": v.get("summary", ""),
+            "is_in_test": test_state.get("is_in_test", False),
+            "test_passed": test_state.get("test_passed", False),
+            "test_chat_history": test_state.get("test_chat_history", []),
+            "test_credential": test_state.get("test_credential", "")
+        }
+
     return UserProgressResponse(
         current_step=progress["current_step"],
         completed_steps=progress["completed_steps"],
-        step_data={
-            int(k): {
-                "extracted_fields": v.get("extracted_fields", {}),
-                "is_confirmed": v.get("is_confirmed", False),
-                "summary": v.get("summary", "")
-            }
-            for k, v in progress["step_data"].items()
-        }
+        step_data=transformed_step_data
     )
 
 @router.get("/step-data/{form_id}")
@@ -62,18 +72,31 @@ async def get_step_data(form_id: int, username: str = Depends(get_current_user))
         raise HTTPException(status_code=403, detail="请先完成前面的阶段")
 
     step_data = progress_service.get_step_data(username, form_id)
+
+    # 提取测试状态
+    test_state = step_data.get("test_state", {}) if step_data else {}
+
     if step_data:
         return {
             "extracted_fields": step_data.get("extracted_fields", {}),
             "chat_history": step_data.get("chat_history", []),
             "is_confirmed": step_data.get("is_confirmed", False),
-            "summary": step_data.get("summary", "")
+            "summary": step_data.get("summary", ""),
+            # 添加测试状态字段
+            "is_in_test": test_state.get("is_in_test", False),
+            "test_passed": test_state.get("test_passed", False),
+            "test_chat_history": test_state.get("test_chat_history", []),
+            "test_credential": test_state.get("test_credential", "")
         }
     return {
         "extracted_fields": {},
         "chat_history": [],
         "is_confirmed": False,
-        "summary": ""
+        "summary": "",
+        "is_in_test": False,
+        "test_passed": False,
+        "test_chat_history": [],
+        "test_credential": ""
     }
 
 @router.get("/previous-summaries/{form_id}")
@@ -240,228 +263,139 @@ async def send_message_stream(
     preprocess_time = time.time() - request_start
 
     def generate_sse():
-        """生成 SSE 事件流 - 支持双模式切换"""
+        """生成 SSE 事件流 - 支持Pipeline模式"""
         full_reply = ""
 
         # 记录生成器启动时间
         generator_start = time.time()
 
-        # 获取聊天模式
-        chat_mode = get_chat_mode()
-        logger.info(f"[流式消息] 当前聊天模式: {chat_mode}")
+        # 获取当前激活的Pipeline
+        pipeline_id = get_active_pipeline_id()
+        pipeline = get_pipeline(pipeline_id)
 
-        # 1. 立即发送thinking事件，让前端知道开始处理了
+        if not pipeline:
+            # 回退到双agent模式
+            pipeline_id = "dual_agent"
+            pipeline = get_pipeline(pipeline_id)
+
+        logger.info(f"[流式消息] 使用Pipeline: {pipeline.name} ({pipeline_id})")
+
+        # 1. 立即发送thinking事件
         thinking_msg = "正在分析图片，这可能需要较长时间..." if request.image_url else "正在分析..."
         thinking_event = {
             "type": "thinking",
             "message": thinking_msg,
             "has_image": request.image_url is not None,
-            "mode": chat_mode  # 添加模式信息
+            "pipeline_id": pipeline_id,
+            "pipeline_name": pipeline.name
         }
         yield f"data: {json.dumps(thinking_event, ensure_ascii=False)}\n\n"
 
         thinking_sent_time = time.time() - generator_start
 
-        # 根据模式选择不同的处理流程
-        if chat_mode == "single_agent":
-            # ========== 单Agent模式 ==========
-            logger.info("[流式消息] 使用单Agent模式")
+        # 使用PipelineExecutor执行流程
+        executor = PipelineExecutor(
+            pipeline=pipeline,
+            form_config=form,
+            user_profile=user_profile,
+            chat_history=[h.model_dump() for h in full_history],
+            extracted_fields=request.extracted_fields,
+            previous_summaries=previous_summaries,
+            image_url=request.image_url
+        )
 
-            single_agent_start = time.time()
-            first_token_time = None
-            token_count = 0
-            all_extracted = dict(request.extracted_fields)
-            newly_extracted_keys = []
+        all_extracted = dict(request.extracted_fields)
+        all_newly_extracted = []
+        step_timings = {}
 
-            for event_type, data in generate_single_agent_stream(
-                form,
-                user_profile,
-                [h.model_dump() for h in full_history],
-                request.extracted_fields,
-                previous_summaries,
-                request.image_url
-            ):
-                if event_type == "extraction":
-                    # 发送提取事件
-                    all_extracted = data["all_extracted"]
-                    newly_extracted_keys = data["newly_extracted"]
-                    is_complete = all(f in all_extracted for f in form["fields"])
-                    needs_confirmation = is_complete
+        for event in executor.execute_stream():
+            event_type = event.get("type")
 
-                    extraction_event = {
-                        "type": "extraction",
-                        "extracted_fields": all_extracted,
-                        "newly_extracted": newly_extracted_keys,
-                        "is_complete": is_complete,
-                        "needs_confirmation": needs_confirmation
-                    }
-                    yield f"data: {json.dumps(extraction_event, ensure_ascii=False)}\n\n"
+            if event_type == "step_start":
+                # 发送步骤开始事件
+                step_event = {
+                    "type": "step_start",
+                    "step_id": event.get("step_id"),
+                    "step_name": event.get("step_name"),
+                    "step_type": event.get("step_type")
+                }
+                yield f"data: {json.dumps(step_event, ensure_ascii=False)}\n\n"
 
-                    extraction_time = time.time() - single_agent_start
-                    logger.info(f"[单Agent] 提取完成, 耗时: {extraction_time*1000:.0f}ms, 新提取: {newly_extracted_keys}")
+            elif event_type == "extraction":
+                # 发送提取结果事件
+                all_extracted = event.get("extracted_fields", all_extracted)
+                newly = event.get("newly_extracted", [])
+                all_newly_extracted.extend(newly)
 
-                elif event_type == "content":
-                    if first_token_time is None:
-                        first_token_time = time.time() - single_agent_start
+                extraction_event = {
+                    "type": "extraction",
+                    "step_id": event.get("step_id"),
+                    "extracted_fields": all_extracted,
+                    "newly_extracted": newly,
+                    "is_complete": event.get("is_complete", False),
+                    "needs_confirmation": event.get("needs_confirmation", False)
+                }
+                yield f"data: {json.dumps(extraction_event, ensure_ascii=False)}\n\n"
 
-                    token_count += 1
-                    full_reply += data
-                    content_event = {
-                        "type": "content",
-                        "content": data
-                    }
-                    yield f"data: {json.dumps(content_event, ensure_ascii=False)}\n\n"
-
-                elif event_type == "done":
-                    full_reply = data
-
-            total_time = time.time() - single_agent_start
-
-            # 发送完成事件
-            done_event = {
-                "type": "done",
-                "full_reply": full_reply
-            }
-            yield f"data: {json.dumps(done_event, ensure_ascii=False)}\n\n"
-
-            # 发送计时信息
-            timing_event = {
-                "type": "timing",
-                "mode": "single_agent",
-                "preprocess_ms": round(preprocess_time * 1000, 2),
-                "thinking_sent_ms": round(thinking_sent_time * 1000, 2),
-                "extraction_ms": round((first_token_time or 0) * 1000, 2),  # 单agent模式下提取和首token同时
-                "first_token_ms": round((first_token_time or 0) * 1000, 2),
-                "total_reply_ms": round(total_time * 1000, 2),
-                "token_count": token_count,
-                "total_ms": round((time.time() - request_start) * 1000, 2)
-            }
-            yield f"data: {json.dumps(timing_event, ensure_ascii=False)}\n\n"
-
-            print(f"[TIMING-单Agent] 首Token: {timing_event['first_token_ms']}ms, "
-                  f"总计: {timing_event['total_ms']}ms")
-
-            # 保存进度
-            history_to_save = [h.model_dump() for h in request.chat_history]
-            user_msg_dict = {"role": "user", "content": request.message}
-            if request.image_url:
-                user_msg_dict["image_url"] = request.image_url
-            history_to_save.append(user_msg_dict)
-            history_to_save.append({"role": "assistant", "content": full_reply})
-
-            progress_service.save_step_data(
-                username,
-                request.form_id,
-                all_extracted,
-                history_to_save,
-                is_confirmed=False
-            )
-
-        else:
-            # ========== 双Agent模式（默认） ==========
-            logger.info("[流式消息] 使用双Agent模式")
-
-            # 2. 先执行字段提取
-            extraction_start = time.time()
-            newly_extracted = extract_fields(
-                form,
-                conversation_text,
-                request.extracted_fields
-            )
-            extraction_time = time.time() - extraction_start
-
-            # 合并已提取的字段
-            all_extracted = {**request.extracted_fields, **newly_extracted}
-
-            # 检查是否完成
-            is_complete = all(f in all_extracted for f in form["fields"])
-            needs_confirmation = is_complete
-
-            # 3. 发送提取结果（在回复之前）
-            extraction_event = {
-                "type": "extraction",
-                "extracted_fields": all_extracted,
-                "newly_extracted": list(newly_extracted.keys()),
-                "is_complete": is_complete,
-                "needs_confirmation": needs_confirmation
-            }
-            yield f"data: {json.dumps(extraction_event, ensure_ascii=False)}\n\n"
-
-            # 4. 根据提取结果生成回复
-            reply_start = time.time()
-            first_token_time = None
-            token_count = 0
-
-            # 检查是否有图片，有图片时给出提示
-            has_image = request.image_url is not None
-            if has_image:
-                logger.info(f"[流式消息] 包含图片: {request.image_url[:50]}...")
-
-            for chunk in generate_reply_stream(
-                form,
-                user_profile,
-                [h.model_dump() for h in full_history],
-                all_extracted,  # 使用提取后的字段，回复会根据提取结果调整
-                previous_summaries,
-                request.image_url,  # 支持图片输入
-                list(newly_extracted.keys())  # 本次新提取的字段列表，让回复模型知道提取结果
-            ):
-                if first_token_time is None:
-                    first_token_time = time.time() - reply_start
-
-                token_count += 1
+            elif event_type == "content":
+                # 流式发送内容
+                chunk = event.get("content", "")
                 full_reply += chunk
                 content_event = {
                     "type": "content",
+                    "step_id": event.get("step_id"),
                     "content": chunk
                 }
                 yield f"data: {json.dumps(content_event, ensure_ascii=False)}\n\n"
 
-            total_reply_time = time.time() - reply_start
+            elif event_type == "step_done":
+                # 步骤完成
+                step_id = event.get("step_id")
+                step_timings[step_id] = event.get("timing_ms", 0)
 
-            # 5. 发送完成事件
-            done_event = {
-                "type": "done",
-                "full_reply": full_reply
-            }
-            yield f"data: {json.dumps(done_event, ensure_ascii=False)}\n\n"
+            elif event_type == "pipeline_done":
+                # Pipeline执行完成
+                all_extracted = event.get("all_extracted", all_extracted)
+                all_newly_extracted = event.get("newly_extracted", all_newly_extracted)
+                full_reply = event.get("full_reply", full_reply)
 
-            # 6. 发送计时信息事件
-            timing_event = {
-                "type": "timing",
-                "mode": "dual_agent",
-                "preprocess_ms": round(preprocess_time * 1000, 2),
-                "thinking_sent_ms": round(thinking_sent_time * 1000, 2),
-                "extraction_ms": round(extraction_time * 1000, 2),
-                "first_token_ms": round(first_token_time * 1000, 2) if first_token_time else None,
-                "total_reply_ms": round(total_reply_time * 1000, 2),
-                "token_count": token_count,
-                "total_ms": round((time.time() - request_start) * 1000, 2)
-            }
-            yield f"data: {json.dumps(timing_event, ensure_ascii=False)}\n\n"
+        # 发送完成事件
+        done_event = {
+            "type": "done",
+            "full_reply": full_reply
+        }
+        yield f"data: {json.dumps(done_event, ensure_ascii=False)}\n\n"
 
-            # 打印日志
-            print(f"[TIMING-双Agent] 字段提取: {timing_event['extraction_ms']}ms, "
-                  f"首Token: {timing_event['first_token_ms']}ms, "
-                  f"回复生成: {timing_event['total_reply_ms']}ms, "
-                  f"总计: {timing_event['total_ms']}ms")
+        # 发送计时信息
+        total_time = time.time() - request_start
+        timing_event = {
+            "type": "timing",
+            "pipeline_id": pipeline_id,
+            "pipeline_name": pipeline.name,
+            "preprocess_ms": round(preprocess_time * 1000, 2),
+            "thinking_sent_ms": round(thinking_sent_time * 1000, 2),
+            "step_timings": {k: round(v, 2) for k, v in step_timings.items()},
+            "total_ms": round(total_time * 1000, 2)
+        }
+        yield f"data: {json.dumps(timing_event, ensure_ascii=False)}\n\n"
 
-            # 7. 保存进度（在流式完成后）
-            # 构建包含图片URL的消息历史
-            history_to_save = [h.model_dump() for h in request.chat_history]
-            user_msg_dict = {"role": "user", "content": request.message}
-            if request.image_url:
-                user_msg_dict["image_url"] = request.image_url
-            history_to_save.append(user_msg_dict)
-            history_to_save.append({"role": "assistant", "content": full_reply})
+        logger.info(f"[TIMING-Pipeline] {pipeline.name}: 总计 {timing_event['total_ms']}ms")
 
-            progress_service.save_step_data(
-                username,
-                request.form_id,
-                all_extracted,
-                history_to_save,
-                is_confirmed=False
-            )
+        # 保存进度
+        history_to_save = [h.model_dump() for h in request.chat_history]
+        user_msg_dict = {"role": "user", "content": request.message}
+        if request.image_url:
+            user_msg_dict["image_url"] = request.image_url
+        history_to_save.append(user_msg_dict)
+        history_to_save.append({"role": "assistant", "content": full_reply})
+
+        progress_service.save_step_data(
+            username,
+            request.form_id,
+            all_extracted,
+            history_to_save,
+            is_confirmed=False
+        )
 
     return StreamingResponse(
         generate_sse(),
@@ -500,6 +434,13 @@ async def confirm_step(
     extracted = step_data.get("extracted_fields", {})
     if not all(f in extracted for f in form["fields"]):
         raise HTTPException(status_code=400, detail="请先完成所有必填项")
+
+    # 检查是否需要通过测试
+    test_enabled = form.get("test_enabled", False)
+    if test_enabled:
+        test_state = step_data.get("test_state", {})
+        if not test_state.get("test_passed", False):
+            raise HTTPException(status_code=400, detail="请先通过关卡测试")
 
     # 生成该阶段的总结
     summary = generate_summary(form, extracted, step_data.get("chat_history", []))
@@ -589,3 +530,196 @@ def save_to_csv(username: str, form_id: int, form_name: str, chat_history: List,
         }
         row.update(extracted_fields)
         writer.writerow(row)
+
+
+# ========== 测试相关接口 ==========
+
+@router.post("/start-test", response_model=TestStartResponse)
+async def start_test(
+    request: TestStartRequest,
+    username: str = Depends(get_current_user)
+):
+    """开始关卡测试"""
+    # 获取表格配置
+    config = load_form_config()
+    form = None
+    for f in config.get("forms", []):
+        if f["id"] == request.form_id:
+            form = f
+            break
+
+    if not form:
+        raise HTTPException(status_code=404, detail="表格不存在")
+
+    # 检查测试是否启用
+    test_enabled = form.get("test_enabled", False)
+    logger.info(f"[start-test] form_id={request.form_id}, test_enabled={test_enabled}, form_keys={list(form.keys())}")
+
+    if not test_enabled:
+        return TestStartResponse(
+            success=False,
+            test_enabled=False,
+            message="该阶段未启用测试"
+        )
+
+    # 检查是否已完成所有字段
+    step_data = progress_service.get_step_data(username, request.form_id)
+    if not step_data:
+        raise HTTPException(status_code=400, detail="请先完成该阶段的学习内容")
+
+    extracted = step_data.get("extracted_fields", {})
+    if not all(f in extracted for f in form["fields"]):
+        raise HTTPException(status_code=400, detail="请先完成所有必填项才能开始测试")
+
+    # 保存测试开始状态
+    progress_service.save_test_state(username, request.form_id, is_in_test=True)
+
+    return TestStartResponse(
+        success=True,
+        test_enabled=True,
+        message="测试开始！",
+        initial_prompt="🎯 关卡测试开始！请认真回答以下问题来验证你的学习成果。"
+    )
+
+
+@router.post("/test-message/stream")
+async def test_message_stream(
+    request: TestMessageRequest,
+    username: str = Depends(get_current_user)
+):
+    """发送测试消息并获取AI评估（SSE流式）"""
+    from services.llm_service import call_llm_stream
+
+    # 获取表格配置
+    config = load_form_config()
+    form = None
+    for f in config.get("forms", []):
+        if f["id"] == request.form_id:
+            form = f
+            break
+
+    if not form:
+        raise HTTPException(status_code=404, detail="表格不存在")
+
+    test_prompt = form.get("test_prompt", "")
+    test_pass_pattern = form.get("test_pass_pattern", "")
+
+    if not test_prompt:
+        raise HTTPException(status_code=400, detail="该阶段未配置测试内容")
+
+    # 获取用户该阶段的数据
+    step_data = progress_service.get_step_data(username, request.form_id)
+    extracted_fields = step_data.get("extracted_fields", {}) if step_data else {}
+
+    def generate_sse():
+        full_reply = ""
+
+        # 构建测试对话的系统提示
+        system_prompt = f"""{test_prompt}
+
+学生在本阶段完成的内容摘要：
+{json.dumps(extracted_fields, ensure_ascii=False, indent=2)}
+
+请基于学生的回答进行评估和引导。"""
+
+        # 构建消息历史
+        messages = [{"role": "system", "content": system_prompt}]
+
+        # 添加测试对话历史
+        for msg in request.test_chat_history:
+            messages.append({
+                "role": msg.role,
+                "content": msg.content
+            })
+
+        # 添加当前用户消息
+        messages.append({
+            "role": "user",
+            "content": request.message
+        })
+
+        # 发送thinking事件
+        thinking_event = {
+            "type": "thinking",
+            "message": "正在评估你的回答..."
+        }
+        yield f"data: {json.dumps(thinking_event, ensure_ascii=False)}\n\n"
+
+        # 调用LLM进行流式生成
+        try:
+            for chunk in call_llm_stream(messages):
+                full_reply += chunk
+                content_event = {
+                    "type": "content",
+                    "content": chunk
+                }
+                yield f"data: {json.dumps(content_event, ensure_ascii=False)}\n\n"
+        except Exception as e:
+            logger.error(f"测试消息生成失败: {str(e)}")
+            error_event = {
+                "type": "error",
+                "message": f"生成回复时出错: {str(e)}"
+            }
+            yield f"data: {json.dumps(error_event, ensure_ascii=False)}\n\n"
+            return
+
+        # 检查是否通过测试（大小写不敏感）
+        is_passed = test_pass_pattern and test_pass_pattern.lower() in full_reply.lower()
+
+        # 提取凭证（如果通过）
+        pass_credential = ""
+        if is_passed:
+            # 从回复中提取包含通过模式的那一行作为凭证（大小写不敏感）
+            pattern_lower = test_pass_pattern.lower()
+            for line in full_reply.split("\n"):
+                if pattern_lower in line.lower():
+                    pass_credential = line.strip()
+                    break
+
+        # 保存测试聊天历史
+        test_history = [msg.model_dump() for msg in request.test_chat_history]
+        test_history.append({"role": "user", "content": request.message})
+        test_history.append({"role": "assistant", "content": full_reply})
+
+        progress_service.save_test_state(
+            username,
+            request.form_id,
+            is_in_test=True,
+            test_passed=is_passed,
+            test_chat_history=test_history,
+            test_credential=pass_credential
+        )
+
+        # 发送完成事件
+        done_event = {
+            "type": "done",
+            "full_reply": full_reply,
+            "is_passed": is_passed,
+            "pass_credential": pass_credential
+        }
+        yield f"data: {json.dumps(done_event, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(
+        generate_sse(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no"
+        }
+    )
+
+
+@router.get("/test-state/{form_id}")
+async def get_test_state(
+    form_id: int,
+    username: str = Depends(get_current_user)
+):
+    """获取用户某个阶段的测试状态"""
+    test_state = progress_service.get_test_state(username, form_id)
+    return test_state or {
+        "is_in_test": False,
+        "test_passed": False,
+        "test_chat_history": [],
+        "test_credential": ""
+    }

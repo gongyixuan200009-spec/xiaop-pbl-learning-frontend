@@ -5,7 +5,10 @@ import { motion, AnimatePresence } from "framer-motion";
 import { useAdminStore } from "@/store/adminStore";
 import AdminLoginForm from "@/components/admin/AdminLoginForm";
 import FormEditor from "@/components/admin/FormEditor";
-import { adminAPI, AdminUserInfo, AdminUserDetail, settingsAPI, ChatModeInfo } from "@/lib/api";
+import { adminAPI, AdminUserInfo, AdminUserDetail, AdminProjectDetail } from "@/lib/api";
+import WorkflowEditor from "@/components/admin/WorkflowEditor";
+import AgeAdaptationConfig from "@/components/admin/AgeAdaptationConfig";
+import PromptHistory from "@/components/admin/PromptHistory";
 
 type TabType = "forms" | "users" | "settings";
 
@@ -28,13 +31,8 @@ export default function AdminPage() {
   const [activeTab, setActiveTab] = useState<TabType>("forms");
   const [users, setUsers] = useState<AdminUserInfo[]>([]);
   const [selectedUser, setSelectedUser] = useState<AdminUserDetail | null>(null);
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [loadingUsers, setLoadingUsers] = useState(false);
-
-  // Settings state
-  const [chatMode, setChatMode] = useState<string>("dual_agent");
-  const [availableModes, setAvailableModes] = useState<ChatModeInfo[]>([]);
-  const [loadingSettings, setLoadingSettings] = useState(false);
-  const [savingMode, setSavingMode] = useState(false);
 
   useEffect(() => {
     if (isAuthenticated) {
@@ -48,19 +46,14 @@ export default function AdminPage() {
     }
   }, [isAuthenticated, activeTab]);
 
-  useEffect(() => {
-    if (isAuthenticated && activeTab === "settings") {
-      loadSettings();
-    }
-  }, [isAuthenticated, activeTab]);
-
   const loadUsers = async () => {
     setLoadingUsers(true);
     try {
       const data = await adminAPI.getUsers();
-      setUsers(data.users);
+      setUsers(data.users || []);
     } catch (error) {
       console.error("加载用户列表失败:", error);
+      setUsers([]);
     } finally {
       setLoadingUsers(false);
     }
@@ -70,35 +63,17 @@ export default function AdminPage() {
     try {
       const data = await adminAPI.getUserDetail(username);
       setSelectedUser(data);
-    } catch (error) {
-      console.error("加载用户详情失败:", error);
-    }
-  };
-
-  const loadSettings = async () => {
-    setLoadingSettings(true);
-    try {
-      const data = await settingsAPI.getChatMode();
-      setChatMode(data.chat_mode);
-      setAvailableModes(data.available_modes);
-    } catch (error) {
-      console.error("加载设置失败:", error);
-    } finally {
-      setLoadingSettings(false);
-    }
-  };
-
-  const handleModeChange = async (newMode: string) => {
-    setSavingMode(true);
-    try {
-      const result = await settingsAPI.updateChatMode(newMode);
-      if (result.success) {
-        setChatMode(result.chat_mode);
+      // 默认选中当前项目或第一个项目
+      const projectIds = Object.keys(data.projects || {});
+      if (data.current_project_id && data.projects[data.current_project_id]) {
+        setSelectedProjectId(data.current_project_id);
+      } else if (projectIds.length > 0) {
+        setSelectedProjectId(projectIds[0]);
+      } else {
+        setSelectedProjectId(null);
       }
     } catch (error) {
-      console.error("更新聊天模式失败:", error);
-    } finally {
-      setSavingMode(false);
+      console.error("加载用户详情失败:", error);
     }
   };
 
@@ -111,6 +86,11 @@ export default function AdminPage() {
 
   const selectedForm = forms.find((f) => f.id === selectedFormId);
 
+  // 获取当前选中的项目详情
+  const selectedProject: AdminProjectDetail | null = selectedUser && selectedProjectId
+    ? selectedUser.projects[selectedProjectId] || null
+    : null;
+
   if (!isAuthenticated) {
     return <AdminLoginForm />;
   }
@@ -121,7 +101,7 @@ export default function AdminPage() {
       <header className="bg-[rgba(255,255,255,0.8)] backdrop-blur-xl border-b border-[#d2d2d7] sticky top-0 z-50">
         <div className="max-w-6xl mx-auto px-6 h-14 flex items-center justify-between">
           <h1 className="text-[17px] font-semibold text-[#1d1d1f] tracking-tight">
-            小P 管理后台
+            工小助 管理后台
           </h1>
 
           <div className="flex items-center gap-3">
@@ -321,14 +301,28 @@ export default function AdminPage() {
                 <div className="bg-white rounded-2xl shadow-sm border border-[#d2d2d7]/50 overflow-hidden">
                   <div className="p-4 border-b border-[#d2d2d7]/50 flex items-center justify-between">
                     <h2 className="text-[15px] font-semibold text-[#1d1d1f]">用户列表</h2>
-                    <motion.button
-                      onClick={loadUsers}
-                      whileHover={{ scale: 1.05 }}
-                      whileTap={{ scale: 0.95 }}
-                      className="w-7 h-7 flex items-center justify-center text-[#0071e3] hover:bg-[#0071e3]/10 rounded-full transition-colors"
-                    >
-                      ↻
-                    </motion.button>
+                    <div className="flex items-center gap-2">
+                      <motion.button
+                        onClick={() => {
+                          const apiUrl = process.env.NEXT_PUBLIC_API_URL || "";
+                          window.open(`${apiUrl}/api/admin/export-users`, "_blank");
+                        }}
+                        whileHover={{ scale: 1.05 }}
+                        whileTap={{ scale: 0.95 }}
+                        className="px-3 py-1 text-xs font-medium text-[#0071e3] hover:bg-[#0071e3]/10 rounded-full transition-colors"
+                        title="导出用户CSV"
+                      >
+                        导出CSV
+                      </motion.button>
+                      <motion.button
+                        onClick={loadUsers}
+                        whileHover={{ scale: 1.05 }}
+                        whileTap={{ scale: 0.95 }}
+                        className="w-7 h-7 flex items-center justify-center text-[#0071e3] hover:bg-[#0071e3]/10 rounded-full transition-colors"
+                      >
+                        ↻
+                      </motion.button>
+                    </div>
                   </div>
 
                   <div className="max-h-[calc(100vh-280px)] overflow-y-auto">
@@ -337,7 +331,7 @@ export default function AdminPage() {
                         <div className="w-6 h-6 border-2 border-[#0071e3] border-t-transparent rounded-full animate-spin mx-auto mb-2" />
                         加载中...
                       </div>
-                    ) : users.length === 0 ? (
+                    ) : !users || users.length === 0 ? (
                       <div className="p-8 text-center text-[#86868b] text-sm">
                         暂无用户数据
                       </div>
@@ -370,17 +364,19 @@ export default function AdminPage() {
                               <span className={`text-xs px-2 py-0.5 rounded-full ${
                                 selectedUser?.username === user.username
                                   ? "bg-white/20 text-white"
-                                  : "bg-[#0071e3]/10 text-[#0071e3]"
+                                  : "bg-[#ff9500]/10 text-[#ff9500]"
                               }`}>
-                                阶段 {user.current_step}
+                                {user.projects.length} 个项目
                               </span>
-                              <span className={`text-xs px-2 py-0.5 rounded-full ${
-                                selectedUser?.username === user.username
-                                  ? "bg-white/20 text-white"
-                                  : "bg-[#34c759]/10 text-[#34c759]"
-                              }`}>
-                                完成 {user.completed_steps.length}
-                              </span>
+                              {user.projects.filter(p => p.is_current).map(p => (
+                                <span key={p.id} className={`text-xs px-2 py-0.5 rounded-full ${
+                                  selectedUser?.username === user.username
+                                    ? "bg-white/20 text-white"
+                                    : "bg-[#0071e3]/10 text-[#0071e3]"
+                                }`}>
+                                  当前: {p.name}
+                                </span>
+                              ))}
                             </div>
                           </motion.button>
                         ))}
@@ -399,84 +395,154 @@ export default function AdminPage() {
                     animate={{ opacity: 1, x: 0 }}
                     className="bg-white rounded-2xl shadow-sm border border-[#d2d2d7]/50 p-6"
                   >
-                    <h2 className="text-xl font-semibold text-[#1d1d1f] mb-6">
+                    <h2 className="text-xl font-semibold text-[#1d1d1f] mb-4">
                       {selectedUser.username}
                     </h2>
 
-                    {/* Progress Overview */}
-                    <div className="grid grid-cols-2 gap-4 mb-6">
-                      <div className="bg-[#f5f5f7] rounded-xl p-4 text-center">
-                        <div className="text-3xl font-semibold text-[#0071e3]">{selectedUser.current_step}</div>
-                        <div className="text-xs text-[#86868b] mt-1">当前阶段</div>
-                      </div>
-                      <div className="bg-[#f5f5f7] rounded-xl p-4 text-center">
-                        <div className="text-3xl font-semibold text-[#34c759]">{selectedUser.completed_steps.length}</div>
-                        <div className="text-xs text-[#86868b] mt-1">已完成</div>
-                      </div>
+                    {/* Project Tabs */}
+                    <div className="flex gap-2 mb-6 flex-wrap">
+                      {Object.entries(selectedUser.projects).map(([projectId, project]) => (
+                        <motion.button
+                          key={projectId}
+                          onClick={() => setSelectedProjectId(projectId)}
+                          whileTap={{ scale: 0.98 }}
+                          className={`px-4 py-2 rounded-xl text-sm font-medium transition-all ${
+                            selectedProjectId === projectId
+                              ? "bg-[#0071e3] text-white"
+                              : "bg-[#f5f5f7] text-[#1d1d1f] hover:bg-[#e8e8ed]"
+                          }`}
+                        >
+                          {project.name || "未命名项目"}
+                          {projectId === selectedUser.current_project_id && (
+                            <span className="ml-2 text-xs opacity-70">(当前)</span>
+                          )}
+                        </motion.button>
+                      ))}
                     </div>
 
-                    {/* Step Data */}
-                    <div className="space-y-4">
-                      <h3 className="text-[15px] font-semibold text-[#1d1d1f]">各阶段数据</h3>
-                      {Object.entries(selectedUser.step_data).length > 0 ? (
-                        Object.entries(selectedUser.step_data).map(([stepId, stepData]) => (
-                          <div key={stepId} className="bg-[#f5f5f7] rounded-xl p-4">
-                            <div className="flex items-center justify-between mb-3">
-                              <span className="text-[15px] font-medium text-[#1d1d1f]">阶段 {stepId}</span>
-                              <span className={`text-xs px-2 py-0.5 rounded-full ${
-                                stepData.is_confirmed
-                                  ? "bg-[#34c759]/10 text-[#34c759]"
-                                  : "bg-[#ff9500]/10 text-[#ff9500]"
-                              }`}>
-                                {stepData.is_confirmed ? "已确认" : "进行中"}
-                              </span>
-                            </div>
-
-                            {Object.keys(stepData.extracted_fields || {}).length > 0 && (
-                              <div className="space-y-2 mb-3">
-                                {Object.entries(stepData.extracted_fields || {}).map(([field, value]) => (
-                                  <div key={field} className="bg-white rounded-lg p-3">
-                                    <div className="text-xs text-[#0071e3] mb-1">{field}</div>
-                                    <div className="text-sm text-[#1d1d1f]">{value}</div>
-                                  </div>
-                                ))}
-                              </div>
-                            )}
-
-                            {stepData.summary && (
-                              <div className="pt-3 border-t border-[#d2d2d7]/50">
-                                <div className="text-xs text-[#86868b] mb-1">总结</div>
-                                <div className="text-sm text-[#1d1d1f]">{stepData.summary}</div>
-                              </div>
-                            )}
-
-                            {stepData.chat_history && stepData.chat_history.length > 0 && (
-                              <div className="pt-3 mt-3 border-t border-[#d2d2d7]/50">
-                                <div className="text-xs text-[#86868b] mb-2">聊天记录</div>
-                                <div className="max-h-60 overflow-y-auto space-y-2">
-                                  {stepData.chat_history.map((msg, idx) => (
-                                    <div key={idx} className={`text-sm p-2 rounded-lg ${
-                                      msg.role === "user" 
-                                        ? "bg-[#0071e3]/10 text-[#1d1d1f]" 
-                                        : "bg-white text-[#1d1d1f]"
-                                    }`}>
-                                      <span className="text-xs font-medium text-[#86868b]">
-                                        {msg.role === "user" ? "用户: " : "小P: "}
-                                      </span>
-                                      {msg.content}
-                                    </div>
-                                  ))}
-                                </div>
-                              </div>
-                            )}
+                    {selectedProject ? (
+                      <>
+                        {/* Progress Overview */}
+                        <div className="grid grid-cols-2 gap-4 mb-6">
+                          <div className="bg-[#f5f5f7] rounded-xl p-4 text-center">
+                            <div className="text-3xl font-semibold text-[#0071e3]">{selectedProject.current_step}</div>
+                            <div className="text-xs text-[#86868b] mt-1">当前阶段</div>
                           </div>
-                        ))
-                      ) : (
-                        <div className="text-center text-[#86868b] py-8">
-                          该用户暂无填写数据
+                          <div className="bg-[#f5f5f7] rounded-xl p-4 text-center">
+                            <div className="text-3xl font-semibold text-[#34c759]">{selectedProject.completed_steps?.length || 0}</div>
+                            <div className="text-xs text-[#86868b] mt-1">已完成</div>
+                          </div>
                         </div>
-                      )}
-                    </div>
+
+                        {/* Step Data */}
+                        <div className="space-y-4">
+                          <h3 className="text-[15px] font-semibold text-[#1d1d1f]">各阶段数据</h3>
+                          {Object.entries(selectedProject.step_data || {}).length > 0 ? (
+                            Object.entries(selectedProject.step_data || {}).map(([stepId, stepData]) => (
+                              <div key={stepId} className="bg-[#f5f5f7] rounded-xl p-4">
+                                <div className="flex items-center justify-between mb-3">
+                                  <span className="text-[15px] font-medium text-[#1d1d1f]">阶段 {stepId}</span>
+                                  <span className={`text-xs px-2 py-0.5 rounded-full ${
+                                    stepData.is_confirmed
+                                      ? "bg-[#34c759]/10 text-[#34c759]"
+                                      : "bg-[#ff9500]/10 text-[#ff9500]"
+                                  }`}>
+                                    {stepData.is_confirmed ? "已确认" : "进行中"}
+                                  </span>
+                                </div>
+
+                                {Object.keys(stepData.extracted_fields || {}).length > 0 && (
+                                  <div className="space-y-2 mb-3">
+                                    {Object.entries(stepData.extracted_fields || {}).map(([field, value]) => (
+                                      <div key={field} className="bg-white rounded-lg p-3">
+                                        <div className="text-xs text-[#0071e3] mb-1">{field}</div>
+                                        <div className="text-sm text-[#1d1d1f]">{value}</div>
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
+
+                                {stepData.summary && (
+                                  <div className="pt-3 border-t border-[#d2d2d7]/50">
+                                    <div className="text-xs text-[#86868b] mb-1">总结</div>
+                                    <div className="text-sm text-[#1d1d1f]">{stepData.summary}</div>
+                                  </div>
+                                )}
+
+                                {stepData.chat_history && stepData.chat_history.length > 0 && (
+                                  <div className="pt-3 mt-3 border-t border-[#d2d2d7]/50">
+                                    <div className="text-xs text-[#86868b] mb-2">聊天记录</div>
+                                    <div className="max-h-60 overflow-y-auto space-y-2">
+                                      {stepData.chat_history.map((msg, idx) => (
+                                        <div key={idx} className={`text-sm p-2 rounded-lg ${
+                                          msg.role === "user"
+                                            ? "bg-[#0071e3]/10 text-[#1d1d1f]"
+                                            : "bg-white text-[#1d1d1f]"
+                                        }`}>
+                                          <span className="text-xs font-medium text-[#86868b]">
+                                            {msg.role === "user" ? "用户: " : "工小助: "}
+                                          </span>
+                                          {msg.content}
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
+
+                                {/* 关卡测试记录 */}
+                                {stepData.test_state && (
+                                  <div className="pt-3 mt-3 border-t border-[#d2d2d7]/50">
+                                    <div className="flex items-center justify-between mb-2">
+                                      <div className="text-xs text-[#86868b]">关卡测试</div>
+                                      <div className="flex items-center gap-2">
+                                        {stepData.test_state.test_credential && (
+                                          <span className="text-xs font-mono text-[#34c759]">
+                                            {stepData.test_state.test_credential}
+                                          </span>
+                                        )}
+                                        <span className={`text-xs px-2 py-0.5 rounded-full ${
+                                          stepData.test_state.test_passed
+                                            ? "bg-[#34c759]/10 text-[#34c759]"
+                                            : stepData.test_state.is_in_test
+                                            ? "bg-[#ff9500]/10 text-[#ff9500]"
+                                            : "bg-[#86868b]/10 text-[#86868b]"
+                                        }`}>
+                                          {stepData.test_state.test_passed ? "已通过" : stepData.test_state.is_in_test ? "进行中" : "未开始"}
+                                        </span>
+                                      </div>
+                                    </div>
+                                    {stepData.test_state.test_chat_history && stepData.test_state.test_chat_history.length > 0 && (
+                                      <div className="max-h-60 overflow-y-auto space-y-2">
+                                        {stepData.test_state.test_chat_history.map((msg: {role: string; content: string}, idx: number) => (
+                                          <div key={idx} className={`text-sm p-2 rounded-lg ${
+                                            msg.role === "user"
+                                              ? "bg-[#ff9500]/10 text-[#1d1d1f]"
+                                              : "bg-white text-[#1d1d1f]"
+                                          }`}>
+                                            <span className="text-xs font-medium text-[#86868b]">
+                                              {msg.role === "user" ? "用户: " : "工小助(测试): "}
+                                            </span>
+                                            {msg.content}
+                                          </div>
+                                        ))}
+                                      </div>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+                            ))
+                          ) : (
+                            <div className="text-center text-[#86868b] py-8">
+                              该项目暂无填写数据
+                            </div>
+                          )}
+                        </div>
+                      </>
+                    ) : (
+                      <div className="text-center text-[#86868b] py-8">
+                        该用户暂无项目数据
+                      </div>
+                    )}
                   </motion.div>
                 ) : (
                   <div className="h-[400px] flex items-center justify-center text-[#86868b]">
@@ -495,88 +561,18 @@ export default function AdminPage() {
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -20 }}
               transition={{ duration: 0.3 }}
-              className="max-w-2xl mx-auto"
+              className="max-w-4xl mx-auto space-y-6"
             >
-              <div className="bg-white rounded-2xl shadow-sm border border-[#d2d2d7]/50 overflow-hidden">
-                <div className="p-6 border-b border-[#d2d2d7]/50">
-                  <h2 className="text-xl font-semibold text-[#1d1d1f]">系统设置</h2>
-                  <p className="text-sm text-[#86868b] mt-1">配置聊天系统的运行模式</p>
-                </div>
-
-                <div className="p-6">
-                  {loadingSettings ? (
-                    <div className="py-8 text-center text-[#86868b]">
-                      <div className="w-6 h-6 border-2 border-[#0071e3] border-t-transparent rounded-full animate-spin mx-auto mb-2" />
-                      加载中...
-                    </div>
-                  ) : (
-                    <div className="space-y-6">
-                      {/* Chat Mode Section */}
-                      <div>
-                        <h3 className="text-[15px] font-semibold text-[#1d1d1f] mb-4">聊天模式</h3>
-                        <div className="space-y-3">
-                          {availableModes.map((mode) => (
-                            <motion.button
-                              key={mode.value}
-                              onClick={() => handleModeChange(mode.value)}
-                              disabled={savingMode}
-                              whileTap={{ scale: 0.98 }}
-                              className={`w-full p-4 rounded-xl text-left transition-all border-2 ${
-                                chatMode === mode.value
-                                  ? "border-[#0071e3] bg-[#0071e3]/5"
-                                  : "border-[#d2d2d7]/50 hover:border-[#0071e3]/50 bg-white"
-                              }`}
-                            >
-                              <div className="flex items-center justify-between">
-                                <div>
-                                  <div className={`text-[15px] font-medium ${
-                                    chatMode === mode.value ? "text-[#0071e3]" : "text-[#1d1d1f]"
-                                  }`}>
-                                    {mode.label}
-                                  </div>
-                                  <div className="text-sm text-[#86868b] mt-1">
-                                    {mode.description}
-                                  </div>
-                                </div>
-                                <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${
-                                  chatMode === mode.value
-                                    ? "border-[#0071e3] bg-[#0071e3]"
-                                    : "border-[#d2d2d7]"
-                                }`}>
-                                  {chatMode === mode.value && (
-                                    <motion.div
-                                      initial={{ scale: 0 }}
-                                      animate={{ scale: 1 }}
-                                      className="w-2 h-2 bg-white rounded-full"
-                                    />
-                                  )}
-                                </div>
-                              </div>
-                            </motion.button>
-                          ))}
-                        </div>
-                        
-                        {savingMode && (
-                          <div className="mt-4 text-center text-sm text-[#0071e3]">
-                            <span className="inline-flex items-center gap-2">
-                              <div className="w-4 h-4 border-2 border-[#0071e3] border-t-transparent rounded-full animate-spin" />
-                              保存中...
-                            </span>
-                          </div>
-                        )}
-                      </div>
-
-                      {/* Info Section */}
-                      <div className="bg-[#f5f5f7] rounded-xl p-4">
-                        <h4 className="text-sm font-medium text-[#1d1d1f] mb-2">模式说明</h4>
-                        <div className="text-sm text-[#86868b] space-y-2">
-                          <p><strong>双Agent模式：</strong>使用两个独立的模型，一个负责提取用户信息，另一个负责生成回复。提取更精确，但响应时间较长。</p>
-                          <p><strong>单Agent模式：</strong>使用一个模型同时处理信息提取和回复生成。响应速度更快，但可能需要更强的模型能力。</p>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-                </div>
+              <div className="bg-white rounded-2xl shadow-sm border border-[#d2d2d7]/50 overflow-hidden p-6">
+                <WorkflowEditor />
+              </div>
+              <div className="bg-white rounded-2xl shadow-sm border border-[#d2d2d7]/50 overflow-hidden p-6">
+                <h2 className="text-[17px] font-semibold text-[#1d1d1f] mb-4">Prompt 配置</h2>
+                <AgeAdaptationConfig />
+              </div>
+              <div className="bg-white rounded-2xl shadow-sm border border-[#d2d2d7]/50 overflow-hidden p-6">
+                <h2 className="text-[17px] font-semibold text-[#1d1d1f] mb-4">修改记录</h2>
+                <PromptHistory />
               </div>
             </motion.div>
           )}
