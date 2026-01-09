@@ -1,0 +1,6 @@
+{
+  "build_command": "echo 'Building project...'",
+  "install_command": "echo 'Installing dependencies...'",
+  "start_command": "echo 'Starting services...'",
+  "framework": "static"
+}
