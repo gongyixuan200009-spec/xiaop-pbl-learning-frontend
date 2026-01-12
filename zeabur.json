@@ -1,0 +1,26 @@
+{
+  "$schema": "https://zeabur.com/schema.json",
+  "build": {
+    "type": "nodejs",
+    "buildCommand": "npm run build",
+    "outputDirectory": ".next"
+  },
+  "deploy": {
+    "startCommand": "npm start",
+    "port": 3000
+  },
+  "env": {
+    "NEXT_PUBLIC_SUPABASE_URL": {
+      "description": "Supabase 项目 URL",
+      "required": true
+    },
+    "NEXT_PUBLIC_SUPABASE_ANON_KEY": {
+      "description": "Supabase 匿名密钥",
+      "required": true
+    },
+    "OPENAI_API_KEY": {
+      "description": "OpenAI API 密钥（可选，用于 AI 对话功能）",
+      "required": false
+    }
+  }
+}
