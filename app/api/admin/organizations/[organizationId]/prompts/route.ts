@@ -1,10 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createClient } from '@supabase/supabase-js'
-
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-)
+import { createServiceRoleClient } from '@/lib/supabase-server'
 
 // GET - 获取组织的 prompts
 export async function GET(
@@ -12,6 +7,7 @@ export async function GET(
   { params }: { params: { organizationId: string } }
 ) {
   try {
+    const supabase = createServiceRoleClient()
     const authHeader = request.headers.get('authorization')
     if (!authHeader) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -65,6 +61,7 @@ export async function POST(
   { params }: { params: { organizationId: string } }
 ) {
   try {
+    const supabase = createServiceRoleClient()
     const authHeader = request.headers.get('authorization')
     if (!authHeader) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -143,6 +140,7 @@ export async function PUT(
   { params }: { params: { organizationId: string } }
 ) {
   try {
+    const supabase = createServiceRoleClient()
     const authHeader = request.headers.get('authorization')
     if (!authHeader) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -218,6 +216,7 @@ export async function DELETE(
   { params }: { params: { organizationId: string } }
 ) {
   try {
+    const supabase = createServiceRoleClient()
     const authHeader = request.headers.get('authorization')
     if (!authHeader) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })

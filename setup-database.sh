@@ -10,7 +10,7 @@ echo ""
 
 # 数据库连接信息
 DB_HOST="10.1.20.75"
-DB_PORT="5432"
+DB_PORT="8011"
 DB_NAME="postgres"
 DB_USER="postgres"
 DB_PASSWORD="your-super-secret-password-change-this"

@@ -9,14 +9,14 @@ async function setupDatabase() {
   // 数据库连接配置
   const client = new Client({
     host: '10.1.20.75',
-    port: 5432,
+    port: 8011,
     database: 'postgres',
     user: 'postgres',
     password: 'your-super-secret-password-change-this',
   });
 
   try {
-    console.log('📊 连接到数据库: 10.1.20.75:5432/postgres\n');
+    console.log('📊 连接到数据库: 10.1.20.75:8011/postgres\n');
     await client.connect();
     console.log('✅ 数据库连接成功！\n');
 

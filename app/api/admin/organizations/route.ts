@@ -1,14 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createClient } from '@supabase/supabase-js'
-
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-)
+import { createServiceRoleClient } from '@/lib/supabase-server'
 
 // GET - 获取用户的组织列表
 export async function GET(request: NextRequest) {
   try {
+    const supabase = createServiceRoleClient()
     const authHeader = request.headers.get('authorization')
     if (!authHeader) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -46,6 +42,7 @@ export async function GET(request: NextRequest) {
 // POST - 创建新组织
 export async function POST(request: NextRequest) {
   try {
+    const supabase = createServiceRoleClient()
     const authHeader = request.headers.get('authorization')
     if (!authHeader) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
