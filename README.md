@@ -1,6 +1,8 @@
-# PBL Learning Platform
+# 小鹏 PBL 学习平台 - 前端
 
-基于 Next.js + Supabase + AI 的学习平台，采用 Serverless 架构。
+基于项目的学习（Project-Based Learning）平台，集成 AI 助手，支持多租户组织管理。
+
+**GitHub**: https://github.com/gongyixuan200009-spec/xiaop-pbl-learning-frontend
 
 ## 技术栈
 

@@ -17,11 +17,7 @@ export async function GET(
 
     const { data: project, error } = await supabase
       .from('projects')
-      .select(`
-        *,
-        project_members(user_id, role),
-        learning_stages(*)
-      `)
+      .select('*')
       .eq('id', params.id)
       .single()
 
@@ -34,7 +30,14 @@ export async function GET(
       return NextResponse.json({ error: 'Project not found' }, { status: 404 })
     }
 
-    return NextResponse.json({ project })
+    // Map name to title for frontend compatibility
+    const mappedProject = {
+      ...project,
+      title: project.name,
+      current_stage: 1  // Default stage
+    }
+
+    return NextResponse.json({ project: mappedProject })
   } catch (error: any) {
     console.error('Unexpected error:', error)
     return NextResponse.json({ error: error.message }, { status: 500 })
@@ -59,11 +62,11 @@ export async function PATCH(
     const { title, description, status, current_stage, metadata } = body
 
     const updates: any = {}
-    if (title !== undefined) updates.title = title
+    if (title !== undefined) updates.name = title  // Map title to name
     if (description !== undefined) updates.description = description
     if (status !== undefined) updates.status = status
-    if (current_stage !== undefined) updates.current_stage = current_stage
-    if (metadata !== undefined) updates.metadata = metadata
+    // Note: current_stage doesn't exist in DB, skip it
+    if (metadata !== undefined) updates.settings = metadata  // Map metadata to settings
 
     const { data: project, error } = await supabase
       .from('projects')
@@ -77,7 +80,14 @@ export async function PATCH(
       return NextResponse.json({ error: error.message }, { status: 500 })
     }
 
-    return NextResponse.json({ project })
+    // Map name to title for frontend compatibility
+    const mappedProject = {
+      ...project,
+      title: project.name,
+      current_stage: 1
+    }
+
+    return NextResponse.json({ project: mappedProject })
   } catch (error: any) {
     console.error('Unexpected error:', error)
     return NextResponse.json({ error: error.message }, { status: 500 })
