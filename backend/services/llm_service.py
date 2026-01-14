@@ -13,6 +13,57 @@ from services.debug_service import record_llm_call, is_debug_mode
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("llm_service")
 
+# ============================================================
+# API提供商配置说明
+# ============================================================
+# 本系统支持两种API提供商：
+# 1. OpenRouter (默认) - 使用 requests 库直接调用
+# 2. 火山引擎豆包 (Volcengine Doubao) - 使用 OpenAI SDK 调用
+#
+# 如何切换API提供商：
+# 在 data/api_key_config.json 中设置 "api_provider" 字段：
+# - "openrouter": 使用 OpenRouter API (默认)
+# - "volcengine": 使用火山引擎豆包 API
+#
+# OpenRouter 配置示例：
+# {
+#     "api_provider": "openrouter",
+#     "api_key": "sk-or-v1-...",
+#     "api_endpoint": "https://openrouter.ai/api/v1",
+#     "default_model": "deepseek/deepseek-chat",
+#     "fast_model": "deepseek/deepseek-chat",
+#     "vision_model": "openai/gpt-4o-mini"
+# }
+#
+# 火山引擎配置示例：
+# {
+#     "api_provider": "volcengine",
+#     "api_key": "7c51735e-0a71-4e2f-b775-2668f3efb757",
+#     "api_endpoint": "https://ark.cn-beijing.volces.com/api/v3",
+#     "default_model": "doubao-seed-1-6-lite-251015",
+#     "fast_model": "doubao-seed-1-6-lite-251015",
+#     "vision_model": "doubao-seed-1-6-lite-251015",
+#     "reasoning_effort": "medium"
+# }
+# ============================================================
+
+def get_api_provider(config: Dict) -> str:
+    """获取API提供商类型"""
+    return config.get('api_provider', 'openrouter')
+
+def get_volcengine_client(config: Dict):
+    """获取火山引擎客户端（延迟导入）"""
+    try:
+        from openai import OpenAI
+        client = OpenAI(
+            base_url=config.get('api_endpoint', 'https://ark.cn-beijing.volces.com/api/v3'),
+            api_key=config.get('api_key', '')
+        )
+        return client
+    except ImportError:
+        logger.error("未安装 openai 库，请运行: pip install --upgrade 'openai>=1.0'")
+        raise Exception("需要安装 openai 库才能使用火山引擎API")
+
 # 简化的提取规则prompt
 SIMPLE_EXTRACTION_RULES = """【严格提取规则】
 1. 只提取user明确表达的内容，不要推测或补充
@@ -158,41 +209,76 @@ def image_url_to_base64(image_url: str) -> str:
         return image_url
 
 def call_llm_fast(messages: List[Dict[str, str]], context: str = "", max_tokens: int = 200) -> str:
-    """调用快速LLM API（用于提取，使用更小的模型）"""
+    """调用快速LLM API（用于提取，使用更小的模型）
+
+    支持两种API提供商：
+    - OpenRouter: 使用 requests 库
+    - 火山引擎: 使用 OpenAI SDK
+    """
     config = load_api_config()
     start_time = time.time()
 
-    api_url = get_api_url(config)
+    api_provider = get_api_provider(config)
     model = get_fast_model(config)
 
-    logger.info(f"[{context}] 快速调用LLM({model}), API: {api_url[:50]}...")
+    logger.info(f"[{context}] 快速调用LLM({model}), Provider: {api_provider}")
 
     try:
-        response = requests.post(
-            url=api_url,
-            headers={
-                "Authorization": f"Bearer {config.get('api_key', '')}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": model,
-                "messages": messages,
-                "max_tokens": max_tokens,
-                "temperature": 0
-            },
-            timeout=15
-        )
+        if api_provider == 'volcengine':
+            # 使用火山引擎 API (OpenAI SDK)
+            client = get_volcengine_client(config)
+            reasoning_effort = config.get('reasoning_effort', 'medium')
 
-        elapsed = (time.time() - start_time) * 1000
-        if response.status_code == 200:
-            result = response.json()["choices"][0]["message"]["content"]
+            completion = client.chat.completions.create(
+                model=model,
+                messages=messages,
+                max_tokens=max_tokens,
+                temperature=0,
+                reasoning_effort=reasoning_effort
+            )
+
+            elapsed = (time.time() - start_time) * 1000
+            result = completion.choices[0].message.content
+
+            # 如果有推理内容，记录下来
+            if hasattr(completion.choices[0].message, 'reasoning_content'):
+                reasoning = completion.choices[0].message.reasoning_content
+                if reasoning:
+                    logger.info(f"[{context}] 推理内容: {reasoning[:100]}...")
+
             logger.info(f"[TIMING][{context}] 快速LLM响应成功, 耗时: {elapsed:.0f}ms")
             record_llm_call("call_llm_fast", context, messages, result, elapsed)
             return result
         else:
-            error = f"API错误: {response.status_code} - {response.text[:200]}"
-            logger.error(f"[TIMING][{context}] {error}, 耗时: {elapsed:.0f}ms")
-            return error
+            # 使用 OpenRouter API (requests)
+            api_url = get_api_url(config)
+            logger.info(f"[{context}] API: {api_url[:50]}...")
+
+            response = requests.post(
+                url=api_url,
+                headers={
+                    "Authorization": f"Bearer {config.get('api_key', '')}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": model,
+                    "messages": messages,
+                    "max_tokens": max_tokens,
+                    "temperature": 0
+                },
+                timeout=15
+            )
+
+            elapsed = (time.time() - start_time) * 1000
+            if response.status_code == 200:
+                result = response.json()["choices"][0]["message"]["content"]
+                logger.info(f"[TIMING][{context}] 快速LLM响应成功, 耗时: {elapsed:.0f}ms")
+                record_llm_call("call_llm_fast", context, messages, result, elapsed)
+                return result
+            else:
+                error = f"API错误: {response.status_code} - {response.text[:200]}"
+                logger.error(f"[TIMING][{context}] {error}, 耗时: {elapsed:.0f}ms")
+                return error
 
     except Exception as e:
         elapsed = (time.time() - start_time) * 1000
@@ -202,37 +288,68 @@ def call_llm_fast(messages: List[Dict[str, str]], context: str = "", max_tokens:
 
 
 def call_llm(messages: List[Dict[str, str]], context: str = "") -> str:
-    """调用LLM API（非流式）"""
+    """调用LLM API（非流式）
+
+    支持两种API提供商：
+    - OpenRouter: 使用 requests 库
+    - 火山引擎: 使用 OpenAI SDK
+    """
     config = load_api_config()
 
-    api_url = get_api_url(config)
+    api_provider = get_api_provider(config)
     model = config.get("default_model", "alibaba/qwen-turbo")
 
-    logger.info(f"[{context}] 调用LLM({model}), 消息数: {len(messages)}")
+    logger.info(f"[{context}] 调用LLM({model}), Provider: {api_provider}, 消息数: {len(messages)}")
 
     try:
-        response = requests.post(
-            url=api_url,
-            headers={
-                "Authorization": f"Bearer {config.get('api_key', '')}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": model,
-                "messages": messages
-            },
-            timeout=30
-        )
+        if api_provider == 'volcengine':
+            # 使用火山引擎 API (OpenAI SDK)
+            client = get_volcengine_client(config)
+            reasoning_effort = config.get('reasoning_effort', 'medium')
 
-        if response.status_code == 200:
-            result = response.json()["choices"][0]["message"]["content"]
+            completion = client.chat.completions.create(
+                model=model,
+                messages=messages,
+                reasoning_effort=reasoning_effort
+            )
+
+            result = completion.choices[0].message.content
+
+            # 如果有推理内容，记录下来
+            if hasattr(completion.choices[0].message, 'reasoning_content'):
+                reasoning = completion.choices[0].message.reasoning_content
+                if reasoning:
+                    logger.info(f"[{context}] 推理内容: {reasoning[:100]}...")
+
             logger.info(f"[{context}] LLM响应成功, 长度: {len(result)}")
             record_llm_call("call_llm", context, messages, result, 0)
             return result
         else:
-            error = f"API错误: {response.status_code}"
-            logger.error(f"[{context}] {error}")
-            return error
+            # 使用 OpenRouter API (requests)
+            api_url = get_api_url(config)
+
+            response = requests.post(
+                url=api_url,
+                headers={
+                    "Authorization": f"Bearer {config.get('api_key', '')}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": model,
+                    "messages": messages
+                },
+                timeout=30
+            )
+
+            if response.status_code == 200:
+                result = response.json()["choices"][0]["message"]["content"]
+                logger.info(f"[{context}] LLM响应成功, 长度: {len(result)}")
+                record_llm_call("call_llm", context, messages, result, 0)
+                return result
+            else:
+                error = f"API错误: {response.status_code}"
+                logger.error(f"[{context}] {error}")
+                return error
 
     except Exception as e:
         error = f"调用失败: {str(e)}"
@@ -241,69 +358,121 @@ def call_llm(messages: List[Dict[str, str]], context: str = "") -> str:
 
 
 def call_llm_stream(messages: List[Dict[str, str]], context: str = "") -> Generator[str, None, None]:
-    """调用LLM API（流式）"""
+    """调用LLM API（流式）
+
+    支持两种API提供商：
+    - OpenRouter: 使用 requests 库
+    - 火山引擎: 使用 OpenAI SDK
+    """
     config = load_api_config()
 
-    api_url = get_api_url(config)
+    api_provider = get_api_provider(config)
     model = config.get("default_model", "alibaba/qwen-turbo")
     total_chars = sum(len(m.get("content", "")) for m in messages)
 
-    logger.info(f"[{context}] 流式调用LLM({model}), API: {api_url[:50]}..., prompt字符: {total_chars}")
+    logger.info(f"[{context}] 流式调用LLM({model}), Provider: {api_provider}, prompt字符: {total_chars}")
 
     start_time = time.time()
     first_token_time = None
     full_response = []  # Buffer for recording
 
     try:
-        response = requests.post(
-            url=api_url,
-            headers={
-                "Authorization": f"Bearer {config.get('api_key', '')}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": model,
-                "messages": messages,
-                "stream": True
-            },
-            timeout=60,
-            stream=True
-        )
+        if api_provider == 'volcengine':
+            # 使用火山引擎 API (OpenAI SDK)
+            client = get_volcengine_client(config)
+            reasoning_effort = config.get('reasoning_effort', 'medium')
 
-        http_connect_time = (time.time() - start_time) * 1000
-        logger.info(f"[TIMING][{context}] HTTP连接, 耗时: {http_connect_time:.0f}ms, status: {response.status_code}")
+            stream = client.chat.completions.create(
+                model=model,
+                messages=messages,
+                stream=True,
+                reasoning_effort=reasoning_effort
+            )
 
-        if response.status_code == 200:
-            for line in response.iter_lines():
-                if line:
-                    line = line.decode('utf-8')
-                    if line.startswith('data: '):
-                        data = line[6:]
-                        if data == '[DONE]':
-                            total_time = (time.time() - start_time) * 1000
-                            logger.info(f"[TIMING][{context}] 流式完成, 总耗时: {total_time:.0f}ms")
-                            # Record the complete response
-                            complete_response = "".join(full_response)
-                            record_llm_call("call_llm_stream", context, messages, complete_response, total_time / 1000)
-                            break
-                        try:
-                            chunk = json.loads(data)
-                            if 'choices' in chunk and len(chunk['choices']) > 0:
-                                delta = chunk['choices'][0].get('delta', {})
-                                content = delta.get('content', '')
-                                if content:
-                                    if first_token_time is None:
-                                        first_token_time = (time.time() - start_time) * 1000
-                                        logger.info(f"[TIMING][{context}] 首Token, 耗时: {first_token_time:.0f}ms")
-                                    full_response.append(content)  # Buffer
-                                    yield content
-                        except json.JSONDecodeError:
-                            continue
+            http_connect_time = (time.time() - start_time) * 1000
+            logger.info(f"[TIMING][{context}] HTTP连接, 耗时: {http_connect_time:.0f}ms")
+
+            reasoning_content = ""
+            with stream:
+                for chunk in stream:
+                    # 处理推理内容
+                    if hasattr(chunk.choices[0].delta, 'reasoning_content') and chunk.choices[0].delta.reasoning_content:
+                        reasoning_content += chunk.choices[0].delta.reasoning_content
+
+                    # 处理正常内容
+                    delta_content = chunk.choices[0].delta.content
+                    if delta_content is not None:
+                        if first_token_time is None:
+                            first_token_time = (time.time() - start_time) * 1000
+                            logger.info(f"[TIMING][{context}] 首Token, 耗时: {first_token_time:.0f}ms")
+                        full_response.append(delta_content)
+                        yield delta_content
+
+            total_time = (time.time() - start_time) * 1000
+            logger.info(f"[TIMING][{context}] 流式完成, 总耗时: {total_time:.0f}ms")
+
+            # 记录推理内容
+            if reasoning_content:
+                logger.info(f"[{context}] 推理内容: {reasoning_content[:100]}...")
+
+            # Record the complete response
+            complete_response = "".join(full_response)
+            record_llm_call("call_llm_stream", context, messages, complete_response, total_time / 1000)
+
         else:
-            error_body = response.text[:500] if response.text else "no body"
-            error = f"API错误: {response.status_code}"
-            logger.error(f"[{context}] {error}, body: {error_body}")
-            yield error
+            # 使用 OpenRouter API (requests)
+            api_url = get_api_url(config)
+            logger.info(f"[{context}] API: {api_url[:50]}...")
+
+            response = requests.post(
+                url=api_url,
+                headers={
+                    "Authorization": f"Bearer {config.get('api_key', '')}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": model,
+                    "messages": messages,
+                    "stream": True
+                },
+                timeout=60,
+                stream=True
+            )
+
+            http_connect_time = (time.time() - start_time) * 1000
+            logger.info(f"[TIMING][{context}] HTTP连接, 耗时: {http_connect_time:.0f}ms, status: {response.status_code}")
+
+            if response.status_code == 200:
+                for line in response.iter_lines():
+                    if line:
+                        line = line.decode('utf-8')
+                        if line.startswith('data: '):
+                            data = line[6:]
+                            if data == '[DONE]':
+                                total_time = (time.time() - start_time) * 1000
+                                logger.info(f"[TIMING][{context}] 流式完成, 总耗时: {total_time:.0f}ms")
+                                # Record the complete response
+                                complete_response = "".join(full_response)
+                                record_llm_call("call_llm_stream", context, messages, complete_response, total_time / 1000)
+                                break
+                            try:
+                                chunk = json.loads(data)
+                                if 'choices' in chunk and len(chunk['choices']) > 0:
+                                    delta = chunk['choices'][0].get('delta', {})
+                                    content = delta.get('content', '')
+                                    if content:
+                                        if first_token_time is None:
+                                            first_token_time = (time.time() - start_time) * 1000
+                                            logger.info(f"[TIMING][{context}] 首Token, 耗时: {first_token_time:.0f}ms")
+                                        full_response.append(content)  # Buffer
+                                        yield content
+                            except json.JSONDecodeError:
+                                continue
+            else:
+                error_body = response.text[:500] if response.text else "no body"
+                error = f"API错误: {response.status_code}"
+                logger.error(f"[{context}] {error}, body: {error_body}")
+                yield error
 
     except Exception as e:
         error = f"调用失败: {str(e)}"
@@ -313,30 +482,35 @@ def call_llm_stream(messages: List[Dict[str, str]], context: str = "") -> Genera
 
 
 def call_llm_vision(messages: List[Dict], image_url: str, context: str = "") -> str:
-    """调用视觉LLM API（支持图片）"""
+    """调用视觉LLM API（支持图片）
+
+    支持两种API提供商：
+    - OpenRouter: 使用 requests 库
+    - 火山引擎: 使用 OpenAI SDK
+    """
     config = load_api_config()
     start_time = time.time()
 
-    api_url = get_api_url(config)
+    api_provider = get_api_provider(config)
     model = get_vision_model(config)
 
-    logger.info(f"[{context}] 调用视觉LLM({model}), 包含图片")
-    
+    logger.info(f"[{context}] 调用视觉LLM({model}), Provider: {api_provider}, 包含图片")
+
     # 将URL转换为base64
     if image_url.startswith('http'):
         logger.info(f"[{context}] 转换图片URL为base64...")
         image_url = image_url_to_base64(image_url)
 
-    # 构建multimodal消息 - 添加调试日志
+    # 构建multimodal消息
     logger.info(f"[{context}] DEBUG: messages数量: {len(messages)}")
     for i, m in enumerate(messages):
         role = m.get('role', 'unknown')
         content_preview = str(m.get('content', ''))[:50]
         logger.info(f"[{context}] DEBUG: messages[{i}]: role={role}, content={content_preview}...")
-    
+
     last_msg = messages[-1] if messages else None
     logger.info(f"[{context}] DEBUG: 最后一条消息role: {last_msg.get('role') if last_msg else 'None'}")
-    
+
     vision_messages = []
     image_added = False
     for i, msg in enumerate(messages):
@@ -356,35 +530,63 @@ def call_llm_vision(messages: List[Dict], image_url: str, context: str = "") -> 
             })
         else:
             vision_messages.append(msg)
-    
+
     logger.info(f"[{context}] DEBUG: 图片是否已添加: {image_added}")
     logger.info(f"[{context}] DEBUG: vision_messages数量: {len(vision_messages)}")
 
     try:
-        response = requests.post(
-            url=api_url,
-            headers={
-                "Authorization": f"Bearer {config.get('api_key', '')}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": model,
-                "messages": vision_messages,
-                "max_tokens": 1000
-            },
-            timeout=60
-        )
+        if api_provider == 'volcengine':
+            # 使用火山引擎 API (OpenAI SDK)
+            client = get_volcengine_client(config)
+            reasoning_effort = config.get('reasoning_effort', 'medium')
 
-        elapsed = (time.time() - start_time) * 1000
-        if response.status_code == 200:
-            result = response.json()["choices"][0]["message"]["content"]
+            completion = client.chat.completions.create(
+                model=model,
+                messages=vision_messages,
+                max_tokens=1000,
+                reasoning_effort=reasoning_effort
+            )
+
+            elapsed = (time.time() - start_time) * 1000
+            result = completion.choices[0].message.content
+
+            # 如果有推理内容，记录下来
+            if hasattr(completion.choices[0].message, 'reasoning_content'):
+                reasoning = completion.choices[0].message.reasoning_content
+                if reasoning:
+                    logger.info(f"[{context}] 推理内容: {reasoning[:100]}...")
+
             logger.info(f"[TIMING][{context}] 视觉LLM响应成功, 耗时: {elapsed:.0f}ms")
             record_llm_call("call_llm_vision", context, messages, result, elapsed)
             return result
         else:
-            error = f"API错误: {response.status_code} - {response.text[:200]}"
-            logger.error(f"[TIMING][{context}] {error}, 耗时: {elapsed:.0f}ms")
-            return error
+            # 使用 OpenRouter API (requests)
+            api_url = get_api_url(config)
+
+            response = requests.post(
+                url=api_url,
+                headers={
+                    "Authorization": f"Bearer {config.get('api_key', '')}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": model,
+                    "messages": vision_messages,
+                    "max_tokens": 1000
+                },
+                timeout=60
+            )
+
+            elapsed = (time.time() - start_time) * 1000
+            if response.status_code == 200:
+                result = response.json()["choices"][0]["message"]["content"]
+                logger.info(f"[TIMING][{context}] 视觉LLM响应成功, 耗时: {elapsed:.0f}ms")
+                record_llm_call("call_llm_vision", context, messages, result, elapsed)
+                return result
+            else:
+                error = f"API错误: {response.status_code} - {response.text[:200]}"
+                logger.error(f"[TIMING][{context}] {error}, 耗时: {elapsed:.0f}ms")
+                return error
 
     except Exception as e:
         elapsed = (time.time() - start_time) * 1000
@@ -394,13 +596,18 @@ def call_llm_vision(messages: List[Dict], image_url: str, context: str = "") -> 
 
 
 def call_llm_vision_stream(messages: List[Dict], image_url: str, context: str = "") -> Generator[str, None, None]:
-    """调用视觉LLM API（流式，支持图片）"""
+    """调用视觉LLM API（流式，支持图片）
+
+    支持两种API提供商：
+    - OpenRouter: 使用 requests 库
+    - 火山引擎: 使用 OpenAI SDK
+    """
     config = load_api_config()
 
-    api_url = get_api_url(config)
+    api_provider = get_api_provider(config)
     model = get_vision_model(config)
 
-    logger.info(f"[{context}] 流式调用视觉LLM({model}), 包含图片")
+    logger.info(f"[{context}] 流式调用视觉LLM({model}), Provider: {api_provider}, 包含图片")
 
     # 将URL转换为base64，因为外部API可能无法访问我们的服务器
     if image_url.startswith('http'):
@@ -415,7 +622,7 @@ def call_llm_vision_stream(messages: List[Dict], image_url: str, context: str = 
     first_token_time = None
     full_response = []  # Buffer for recording
 
-    # 构建multimodal消息 - 添加调试日志
+    # 构建multimodal消息
     logger.info(f"[{context}] DEBUG: messages数量: {len(messages)}")
     for i, m in enumerate(messages):
         role = m.get('role', 'unknown')
@@ -449,56 +656,103 @@ def call_llm_vision_stream(messages: List[Dict], image_url: str, context: str = 
     logger.info(f"[{context}] DEBUG: vision_messages数量: {len(vision_messages)}")
 
     try:
-        response = requests.post(
-            url=api_url,
-            headers={
-                "Authorization": f"Bearer {config.get('api_key', '')}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": model,
-                "messages": vision_messages,
-                "stream": True,
-                "max_tokens": 1000
-            },
-            timeout=120,
-            stream=True
-        )
+        if api_provider == 'volcengine':
+            # 使用火山引擎 API (OpenAI SDK)
+            client = get_volcengine_client(config)
+            reasoning_effort = config.get('reasoning_effort', 'medium')
 
-        http_connect_time = (time.time() - start_time) * 1000
-        logger.info(f"[TIMING][{context}] 视觉HTTP连接, 耗时: {http_connect_time:.0f}ms, status: {response.status_code}")
+            stream = client.chat.completions.create(
+                model=model,
+                messages=vision_messages,
+                stream=True,
+                max_tokens=1000,
+                reasoning_effort=reasoning_effort
+            )
 
-        if response.status_code == 200:
-            for line in response.iter_lines():
-                if line:
-                    line = line.decode('utf-8')
-                    if line.startswith('data: '):
-                        data = line[6:]
-                        if data == '[DONE]':
-                            total_time = (time.time() - start_time) * 1000
-                            logger.info(f"[TIMING][{context}] 视觉流式完成, 总耗时: {total_time:.0f}ms")
-                            # Record the complete response
-                            complete_response = "".join(full_response)
-                            record_llm_call("call_llm_vision_stream", context, messages, complete_response, total_time / 1000)
-                            break
-                        try:
-                            chunk = json.loads(data)
-                            if 'choices' in chunk and len(chunk['choices']) > 0:
-                                delta = chunk['choices'][0].get('delta', {})
-                                content = delta.get('content', '')
-                                if content:
-                                    if first_token_time is None:
-                                        first_token_time = (time.time() - start_time) * 1000
-                                        logger.info(f"[TIMING][{context}] 视觉首Token, 耗时: {first_token_time:.0f}ms")
-                                    full_response.append(content)  # Buffer
-                                    yield content
-                        except json.JSONDecodeError:
-                            continue
+            http_connect_time = (time.time() - start_time) * 1000
+            logger.info(f"[TIMING][{context}] 视觉HTTP连接, 耗时: {http_connect_time:.0f}ms")
+
+            reasoning_content = ""
+            with stream:
+                for chunk in stream:
+                    # 处理推理内容
+                    if hasattr(chunk.choices[0].delta, 'reasoning_content') and chunk.choices[0].delta.reasoning_content:
+                        reasoning_content += chunk.choices[0].delta.reasoning_content
+
+                    # 处理正常内容
+                    delta_content = chunk.choices[0].delta.content
+                    if delta_content is not None:
+                        if first_token_time is None:
+                            first_token_time = (time.time() - start_time) * 1000
+                            logger.info(f"[TIMING][{context}] 视觉首Token, 耗时: {first_token_time:.0f}ms")
+                        full_response.append(delta_content)
+                        yield delta_content
+
+            total_time = (time.time() - start_time) * 1000
+            logger.info(f"[TIMING][{context}] 视觉流式完成, 总耗时: {total_time:.0f}ms")
+
+            # 记录推理内容
+            if reasoning_content:
+                logger.info(f"[{context}] 推理内容: {reasoning_content[:100]}...")
+
+            # Record the complete response
+            complete_response = "".join(full_response)
+            record_llm_call("call_llm_vision_stream", context, messages, complete_response, total_time / 1000)
+
         else:
-            error_body = response.text[:500] if response.text else "no body"
-            error = f"API错误: {response.status_code}"
-            logger.error(f"[{context}] {error}, body: {error_body}")
-            yield error
+            # 使用 OpenRouter API (requests)
+            api_url = get_api_url(config)
+
+            response = requests.post(
+                url=api_url,
+                headers={
+                    "Authorization": f"Bearer {config.get('api_key', '')}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": model,
+                    "messages": vision_messages,
+                    "stream": True,
+                    "max_tokens": 1000
+                },
+                timeout=120,
+                stream=True
+            )
+
+            http_connect_time = (time.time() - start_time) * 1000
+            logger.info(f"[TIMING][{context}] 视觉HTTP连接, 耗时: {http_connect_time:.0f}ms, status: {response.status_code}")
+
+            if response.status_code == 200:
+                for line in response.iter_lines():
+                    if line:
+                        line = line.decode('utf-8')
+                        if line.startswith('data: '):
+                            data = line[6:]
+                            if data == '[DONE]':
+                                total_time = (time.time() - start_time) * 1000
+                                logger.info(f"[TIMING][{context}] 视觉流式完成, 总耗时: {total_time:.0f}ms")
+                                # Record the complete response
+                                complete_response = "".join(full_response)
+                                record_llm_call("call_llm_vision_stream", context, messages, complete_response, total_time / 1000)
+                                break
+                            try:
+                                chunk = json.loads(data)
+                                if 'choices' in chunk and len(chunk['choices']) > 0:
+                                    delta = chunk['choices'][0].get('delta', {})
+                                    content = delta.get('content', '')
+                                    if content:
+                                        if first_token_time is None:
+                                            first_token_time = (time.time() - start_time) * 1000
+                                            logger.info(f"[TIMING][{context}] 视觉首Token, 耗时: {first_token_time:.0f}ms")
+                                        full_response.append(content)  # Buffer
+                                        yield content
+                            except json.JSONDecodeError:
+                                continue
+            else:
+                error_body = response.text[:500] if response.text else "no body"
+                error = f"API错误: {response.status_code}"
+                logger.error(f"[{context}] {error}, body: {error_body}")
+                yield error
 
     except Exception as e:
         error = f"调用失败: {str(e)}"
@@ -589,20 +843,45 @@ def extract_fields(
         cleaned = clean_json_string(response)
         result = json.loads(cleaned)
 
+        # 清理函数：递归清理 null 值
+        def clean_null_values(value):
+            """递归清理数据中的 null 值"""
+            if value is None:
+                return None
+            elif isinstance(value, list):
+                # 清理列表中的 null 值，替换为空字符串
+                cleaned = [clean_null_values(v) if v is not None else "" for v in value]
+                # 如果列表全是空字符串，返回 None
+                if all(v == "" for v in cleaned):
+                    return None
+                return cleaned
+            elif isinstance(value, dict):
+                # 递归清理字典
+                return {k: clean_null_values(v) for k, v in value.items() if v is not None}
+            else:
+                return value
+
         filtered = {}
         for field, value in result.items():
             if field in form_config["fields"] and value and str(value).lower() != "null":
+                # 清理 null 值（包括列表中的 null）
+                cleaned_value = clean_null_values(value)
+
+                # 如果清理后变成 None，跳过
+                if cleaned_value is None:
+                    continue
+
                 # 新提取的值会覆盖旧值，即使字段已存在
-                val_str = str(value)
+                val_str = str(cleaned_value)
                 if field in already_extracted:
-                    if already_extracted[field] != value:
+                    if already_extracted[field] != cleaned_value:
                         # 更新已有字段
-                        filtered[field] = value
+                        filtered[field] = cleaned_value
                         logger.info(f"更新字段: {field} = {val_str[:50] if len(val_str) > 50 else val_str}... (旧值: {str(already_extracted[field])[:30]}...)")
                     # 如果值相同，不需要重复记录
                 else:
                     # 新增字段
-                    filtered[field] = value
+                    filtered[field] = cleaned_value
                     logger.info(f"新增字段: {field} = {val_str[:50] if len(val_str) > 50 else val_str}...")
 
         total_time = (time.time() - start_time) * 1000

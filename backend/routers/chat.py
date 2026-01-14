@@ -16,10 +16,13 @@ from services.llm_service import extract_fields, generate_reply, generate_reply_
 from services.single_agent_service import get_chat_mode, generate_single_agent_stream
 from services.pipeline_service import get_pipeline, PipelineExecutor
 from services.progress_service import progress_service
+from services.chat_logger_service import get_chat_logger
 from config import load_form_config, DATA_DIR, get_active_pipeline_id
 import logging
+import uuid
 
 logger = logging.getLogger("chat_router")
+chat_logger = get_chat_logger()
 from routers.auth import get_current_user
 
 router = APIRouter(prefix="/api/chat", tags=["聊天"])
@@ -217,6 +220,9 @@ async def send_message_stream(
     - single_agent: 单agent模式，一个agent同时处理提取和回复
     """
     from services.auth_service import auth_service
+
+    # 生成会话ID用于日志追踪
+    session_id = str(uuid.uuid4())
 
     # 记录请求开始时间
     request_start = time.time()
@@ -723,3 +729,33 @@ async def get_test_state(
         "test_chat_history": [],
         "test_credential": ""
     }
+
+
+@router.post("/reset-step/{form_id}")
+async def reset_step(
+    form_id: int,
+    username: str = Depends(get_current_user)
+):
+    """重置指定阶段的所有数据（聊天记录、提取字段、测试状态等）"""
+    # 检查表格是否存在
+    config = load_form_config()
+    form = None
+    for f in config.get("forms", []):
+        if f["id"] == form_id:
+            form = f
+            break
+
+    if not form:
+        raise HTTPException(status_code=404, detail="表格不存在")
+
+    # 执行重置
+    success = progress_service.reset_step_data(username, form_id)
+
+    if success:
+        return {
+            "success": True,
+            "message": f"阶段 {form['name']} 已重置",
+            "form_id": form_id
+        }
+    else:
+        raise HTTPException(status_code=500, detail="重置失败")

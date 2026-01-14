@@ -187,47 +187,37 @@ async def list_users_summary():
     for username in all_usernames:
         user_info = {
             "username": username,
-            "current_step": 1,
-            "completed_steps": [],
-            "step_data": {},
-            "profile": users_data.get(username, {}).get("profile", {})
+            "profile": users_data.get(username, {}).get("profile", {}),
+            "projects": []
         }
-        
+
         progress_file = progress_dir / f"{username}.json"
         if progress_file.exists():
             try:
                 with open(progress_file, "r", encoding="utf-8") as f:
                     data = json.load(f)
-                    
+
                     # 兼容新旧两种数据格式
                     current_project_id = data.get("current_project_id")
                     if current_project_id and "projects" in data:
                         # 新格式：有项目管理
-                        project = data["projects"][current_project_id]
-                        user_info["current_step"] = project.get("current_step", 1)
-                        user_info["completed_steps"] = project.get("completed_steps", [])
-                        step_data_source = project.get("step_data", {})
+                        for project_id, project in data["projects"].items():
+                            user_info["projects"].append({
+                                "id": project_id,
+                                "name": project.get("name", "未命名项目"),
+                                "is_current": project_id == current_project_id
+                            })
                     else:
                         # 旧格式：无项目管理（向后兼容）
-                        user_info["current_step"] = data.get("current_step", 1)
-                        user_info["completed_steps"] = data.get("completed_steps", [])
-                        step_data_source = data.get("step_data", {})
-                    
-                    # 只保留step_data的概要信息，移除chat_history
-                    step_data_summary = {}
-                    for step_id, step_info in step_data_source.items():
-                        step_data_summary[step_id] = {
-                            "form_id": step_info.get("form_id"),
-                            "extracted_fields": step_info.get("extracted_fields", {}),
-                            "is_confirmed": step_info.get("is_confirmed", False),
-                            "summary": step_info.get("summary", "")
-                            # 注意：这里不包含 chat_history
-                        }
-                    user_info["step_data"] = step_data_summary
+                        user_info["projects"].append({
+                            "id": "default",
+                            "name": "默认项目",
+                            "is_current": True
+                        })
 
             except Exception as e:
                 pass
-        
+
         users_list.append(user_info)
     
     return {"users": users_list}
@@ -247,18 +237,34 @@ async def get_user_detail(username: str):
     # 兼容新旧两种数据格式
     current_project_id = data.get("current_project_id")
     if current_project_id and "projects" in data:
-        # 新格式：有项目管理，提取当前项目的数据
-        project = data["projects"][current_project_id]
+        # 新格式：有项目管理，返回完整的项目数据
         return {
             "username": data.get("username"),
-            "current_step": project.get("current_step", 1),
-            "completed_steps": project.get("completed_steps", []),
-            "step_data": project.get("step_data", {}),
-            "current_project_id": current_project_id
+            "current_project_id": current_project_id,
+            "projects": data.get("projects", {}),
+            "created_at": data.get("created_at"),
+            "updated_at": data.get("updated_at")
         }
     else:
-        # 旧格式：无项目管理，直接返回
-        return data
+        # 旧格式：无项目管理，包装成项目格式返回
+        default_project_id = "default"
+        return {
+            "username": data.get("username"),
+            "current_project_id": default_project_id,
+            "projects": {
+                default_project_id: {
+                    "id": default_project_id,
+                    "name": "默认项目",
+                    "current_step": data.get("current_step", 1),
+                    "completed_steps": data.get("completed_steps", []),
+                    "step_data": data.get("step_data", {}),
+                    "created_at": data.get("created_at"),
+                    "updated_at": data.get("updated_at")
+                }
+            },
+            "created_at": data.get("created_at"),
+            "updated_at": data.get("updated_at")
+        }
 
 @router.get("/export-users")
 async def export_users_csv():
@@ -291,21 +297,19 @@ async def export_users_csv():
     users_list = []
     for username in all_usernames:
         user_info = {
-            "用户名": username,
+            "用户名": username or "-",
             "当前阶段": 1,
-            "已完成阶段": "",
-            "年龄": "",
-            "性别": "",
-            "学校": "",
-            "年级": "",
+            "已完成阶段": "-",
         }
 
-        # 获取用户 profile
+        # 获取用户 profile（包含所有注册信息）
         profile = users_data.get(username, {}).get("profile", {})
-        user_info["年龄"] = profile.get("age", "")
-        user_info["性别"] = profile.get("gender", "")
-        user_info["学校"] = profile.get("school", "")
-        user_info["年级"] = profile.get("grade", "")
+        user_info["年级"] = profile.get("grade", "-")
+        user_info["性别"] = profile.get("gender", "-")
+        user_info["数学成绩"] = profile.get("math_score", "-")
+        user_info["理科感受"] = profile.get("science_feeling", "-")
+        user_info["年龄"] = profile.get("age", "-")
+        user_info["学校"] = profile.get("school", "-")
 
         # 获取进度信息
         progress_file = progress_dir / f"{username}.json"
@@ -326,14 +330,21 @@ async def export_users_csv():
                         user_info["当前阶段"] = data.get("current_step", 1)
                         completed = data.get("completed_steps", [])
                         step_data = data.get("step_data", {})
-                    
-                    user_info["已完成阶段"] = ", ".join(map(str, completed)) if completed else ""
-                    
+
+                    user_info["已完成阶段"] = ", ".join(map(str, completed)) if completed else "-"
+
                     for step_id, step_info in step_data.items():
                         extracted = step_info.get("extracted_fields", {})
                         for field_name, field_value in extracted.items():
                             col_name = f"阶段{step_id}_{field_name}"
-                            user_info[col_name] = field_value if field_value else ""
+                            # 处理空值
+                            if field_value:
+                                if isinstance(field_value, list):
+                                    user_info[col_name] = ", ".join(str(v) for v in field_value if v)
+                                else:
+                                    user_info[col_name] = str(field_value)
+                            else:
+                                user_info[col_name] = "-"
 
                         # 提取测试状态数据
                         test_state = step_info.get("test_state", {})
@@ -351,26 +362,27 @@ async def export_users_csv():
 
                             # 测试凭证
                             test_credential = test_state.get("test_credential", "")
-                            user_info[f"阶段{step_id}_测试凭证"] = test_credential
+                            user_info[f"阶段{step_id}_测试凭证"] = test_credential or "-"
 
                             # 测试对话（格式化为可读文本）
                             test_chat = test_state.get("test_chat_history", [])
                             if test_chat:
                                 chat_text = []
                                 for msg in test_chat:
-                                    role = "用户" if msg.get("role") == "user" else "小P"
+                                    role = "用户" if msg.get("role") == "user" else "工小助"
                                     content = msg.get("content", "")
-                                    chat_text.append(f"[{role}]: {content}")
-                                user_info[f"阶段{step_id}_测试对话"] = " | ".join(chat_text)
+                                    if content:
+                                        chat_text.append(f"[{role}]: {content}")
+                                user_info[f"阶段{step_id}_测试对话"] = " | ".join(chat_text) if chat_text else "-"
                             else:
-                                user_info[f"阶段{step_id}_测试对话"] = ""
+                                user_info[f"阶段{step_id}_测试对话"] = "-"
             except Exception as e:
                 pass
 
         users_list.append(user_info)
 
     # 收集所有可能的列名
-    all_columns = ["用户名", "当前阶段", "已完成阶段", "年龄", "性别", "学校", "年级"]
+    all_columns = ["用户名", "年级", "性别", "数学成绩", "理科感受", "年龄", "学校", "当前阶段", "已完成阶段"]
     extra_columns = set()
     for user in users_list:
         for key in user.keys():
@@ -383,7 +395,9 @@ async def export_users_csv():
     writer = csv.DictWriter(output, fieldnames=all_columns, extrasaction='ignore')
     writer.writeheader()
     for user in users_list:
-        writer.writerow(user)
+        # 确保所有字段都有值，空值用 "-" 填充
+        row = {col: user.get(col, "-") for col in all_columns}
+        writer.writerow(row)
 
     # 添加UTF-8 BOM并转换为bytes
     output.seek(0)
@@ -399,16 +413,411 @@ async def export_users_csv():
         headers={"Content-Disposition": f"attachment; filename={filename}"}
     )
 
+
+@router.get("/export-users-chats")
+async def export_all_users_chats_csv():
+    """导出所有用户的聊天记录为CSV文件（四列格式：用户名、阶段、角色、内容）"""
+    import csv
+    import io
+    from datetime import datetime
+    from fastapi.responses import StreamingResponse
+
+    progress_dir = DATA_DIR / "user_progress"
+    users_file = DATA_DIR / "users.json"
+
+    # 获取所有用户
+    users_data = {}
+    if users_file.exists():
+        with open(users_file, "r", encoding="utf-8") as f:
+            users_data = json.load(f)
+
+    all_usernames = list(users_data.keys())
+
+    # 从进度文件中补充用户名
+    if progress_dir.exists():
+        for f in progress_dir.iterdir():
+            if f.suffix == ".json":
+                username = f.stem
+                if username not in all_usernames:
+                    all_usernames.append(username)
+
+    # 收集所有用户的聊天记录
+    all_rows = []
+    for username in all_usernames:
+        progress_file = progress_dir / f"{username}.json"
+        if progress_file.exists():
+            try:
+                with open(progress_file, "r", encoding="utf-8") as pf:
+                    data = json.load(pf)
+
+                    # 兼容新旧两种数据格式
+                    current_project_id = data.get("current_project_id")
+                    if current_project_id and "projects" in data:
+                        # 新格式：有项目管理，导出所有项目
+                        for project_id, project in data["projects"].items():
+                            step_data = project.get("step_data", {})
+                            for step_id, step_info in step_data.items():
+                                # 聊天记录
+                                chat_history = step_info.get("chat_history", [])
+                                if chat_history:
+                                    for msg in chat_history:
+                                        role = "学生" if msg.get("role") == "user" else "AI"
+                                        content = msg.get("content", "")
+                                        if content:
+                                            all_rows.append({
+                                                "用户名": username,
+                                                "阶段": f"阶段{step_id}",
+                                                "角色": role,
+                                                "内容": content
+                                            })
+
+                                # 测试对话
+                                test_state = step_info.get("test_state", {})
+                                if test_state:
+                                    test_chat = test_state.get("test_chat_history", [])
+                                    if test_chat:
+                                        for msg in test_chat:
+                                            role = "学生" if msg.get("role") == "user" else "AI"
+                                            content = msg.get("content", "")
+                                            if content:
+                                                all_rows.append({
+                                                    "用户名": username,
+                                                    "阶段": f"阶段{step_id}_测试",
+                                                    "角色": role,
+                                                    "内容": content
+                                                })
+                    else:
+                        # 旧格式：无项目管理
+                        step_data = data.get("step_data", {})
+                        for step_id, step_info in step_data.items():
+                            # 聊天记录
+                            chat_history = step_info.get("chat_history", [])
+                            if chat_history:
+                                for msg in chat_history:
+                                    role = "学生" if msg.get("role") == "user" else "AI"
+                                    content = msg.get("content", "")
+                                    if content:
+                                        all_rows.append({
+                                            "用户名": username,
+                                            "阶段": f"阶段{step_id}",
+                                            "角色": role,
+                                            "内容": content
+                                        })
+
+                            # 测试对话
+                            test_state = step_info.get("test_state", {})
+                            if test_state:
+                                test_chat = test_state.get("test_chat_history", [])
+                                if test_chat:
+                                    for msg in test_chat:
+                                        role = "学生" if msg.get("role") == "user" else "AI"
+                                        content = msg.get("content", "")
+                                        if content:
+                                            all_rows.append({
+                                                "用户名": username,
+                                                "阶段": f"阶段{step_id}_测试",
+                                                "角色": role,
+                                                "内容": content
+                                            })
+            except Exception as e:
+                # 跳过有问题的用户文件
+                pass
+
+    # 生成CSV（四列格式）
+    output = io.StringIO()
+    fieldnames = ["用户名", "阶段", "角色", "内容"]
+    writer = csv.DictWriter(output, fieldnames=fieldnames)
+    writer.writeheader()
+    for row in all_rows:
+        writer.writerow(row)
+
+    # 添加UTF-8 BOM并转换为bytes
+    output.seek(0)
+    csv_content = '\ufeff' + output.getvalue()
+    csv_bytes = csv_content.encode('utf-8')
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"all_users_chats_{timestamp}.csv"
+
+    return StreamingResponse(
+        iter([csv_bytes]),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
+    )
+
+
+@router.get("/export-user/{username}")
+async def export_single_user_csv(username: str):
+    """导出单个用户的对话记录为CSV文件（三列格式：角色、内容、用户名）"""
+    import csv
+    import io
+    from datetime import datetime
+    from fastapi.responses import StreamingResponse
+
+    progress_dir = DATA_DIR / "user_progress"
+    users_file = DATA_DIR / "users.json"
+
+    # 获取用户基本信息
+    users_data = {}
+    if users_file.exists():
+        with open(users_file, "r", encoding="utf-8") as f:
+            users_data = json.load(f)
+
+    if username not in users_data:
+        # 检查是否有进度文件
+        progress_file = progress_dir / f"{username}.json"
+        if not progress_file.exists():
+            raise HTTPException(status_code=404, detail="用户不存在")
+
+    user_rows = []
+
+    # 获取进度信息
+    progress_file = progress_dir / f"{username}.json"
+    if progress_file.exists():
+        try:
+            with open(progress_file, "r", encoding="utf-8") as pf:
+                data = json.load(pf)
+
+                # 兼容新旧两种数据格式
+                current_project_id = data.get("current_project_id")
+                if current_project_id and "projects" in data:
+                    # 新格式：有项目管理，导出所有项目
+                    for project_id, project in data["projects"].items():
+                        # 各阶段数据
+                        step_data = project.get("step_data", {})
+                        for step_id, step_info in step_data.items():
+                            # 聊天记录
+                            chat_history = step_info.get("chat_history", [])
+                            if chat_history:
+                                for msg in chat_history:
+                                    role = "学生" if msg.get("role") == "user" else "AI"
+                                    content = msg.get("content", "")
+                                    if content:
+                                        user_rows.append({
+                                            "角色": role,
+                                            "内容": content,
+                                            "用户名": username
+                                        })
+
+                            # 测试对话
+                            test_state = step_info.get("test_state", {})
+                            if test_state:
+                                test_chat = test_state.get("test_chat_history", [])
+                                if test_chat:
+                                    for msg in test_chat:
+                                        role = "学生" if msg.get("role") == "user" else "AI"
+                                        content = msg.get("content", "")
+                                        if content:
+                                            user_rows.append({
+                                                "角色": role,
+                                                "内容": content,
+                                                "用户名": username
+                                            })
+                else:
+                    # 旧格式：无项目管理
+                    step_data = data.get("step_data", {})
+                    for step_id, step_info in step_data.items():
+                        # 聊天记录
+                        chat_history = step_info.get("chat_history", [])
+                        if chat_history:
+                            for msg in chat_history:
+                                role = "学生" if msg.get("role") == "user" else "AI"
+                                content = msg.get("content", "")
+                                if content:
+                                    user_rows.append({
+                                        "角色": role,
+                                        "内容": content,
+                                        "用户名": username
+                                    })
+
+                        # 测试对话
+                        test_state = step_info.get("test_state", {})
+                        if test_state:
+                            test_chat = test_state.get("test_chat_history", [])
+                            if test_chat:
+                                for msg in test_chat:
+                                    role = "学生" if msg.get("role") == "user" else "AI"
+                                    content = msg.get("content", "")
+                                    if content:
+                                        user_rows.append({
+                                            "角色": role,
+                                            "内容": content,
+                                            "用户名": username
+                                        })
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"读取用户数据失败: {str(e)}")
+
+    # 生成CSV（三列格式）
+    output = io.StringIO()
+    fieldnames = ["角色", "内容", "用户名"]
+    writer = csv.DictWriter(output, fieldnames=fieldnames)
+    writer.writeheader()
+    for row in user_rows:
+        writer.writerow(row)
+
+    # 添加UTF-8 BOM并转换为bytes
+    output.seek(0)
+    csv_content = '\ufeff' + output.getvalue()
+    csv_bytes = csv_content.encode('utf-8')
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"user_{username}_{timestamp}.csv"
+
+    return StreamingResponse(
+        iter([csv_bytes]),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
+    )
+
+class BatchExportRequest(BaseModel):
+    usernames: List[str]
+
+@router.post("/export-batch")
+async def export_batch_users(data: BatchExportRequest):
+    """批量导出多个用户的数据为ZIP文件，每个用户一个CSV"""
+    import csv
+    import io
+    import zipfile
+    from datetime import datetime
+    from fastapi.responses import StreamingResponse
+
+    if not data.usernames:
+        raise HTTPException(status_code=400, detail="用户名列表不能为空")
+
+    progress_dir = DATA_DIR / "user_progress"
+    users_file = DATA_DIR / "users.json"
+
+    # 获取所有用户基本信息
+    users_data = {}
+    if users_file.exists():
+        with open(users_file, "r", encoding="utf-8") as f:
+            users_data = json.load(f)
+
+    # 创建内存中的ZIP文件
+    zip_buffer = io.BytesIO()
+
+    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+        for username in data.usernames:
+            # 检查用户是否存在
+            progress_file = progress_dir / f"{username}.json"
+            if not progress_file.exists():
+                continue  # 跳过不存在的用户
+
+            user_rows = []
+
+            # 获取进度信息
+            try:
+                with open(progress_file, "r", encoding="utf-8") as pf:
+                    user_data = json.load(pf)
+
+                    # 兼容新旧两种数据格式
+                    current_project_id = user_data.get("current_project_id")
+                    if current_project_id and "projects" in user_data:
+                        # 新格式：有项目管理，导出所有项目
+                        for project_id, project in user_data["projects"].items():
+                            # 各阶段数据
+                            step_data = project.get("step_data", {})
+                            for step_id, step_info in step_data.items():
+                                # 聊天记录
+                                chat_history = step_info.get("chat_history", [])
+                                if chat_history:
+                                    for msg in chat_history:
+                                        role = "学生" if msg.get("role") == "user" else "AI"
+                                        content = msg.get("content", "")
+                                        if content:
+                                            user_rows.append({
+                                                "角色": role,
+                                                "内容": content,
+                                                "用户名": username
+                                            })
+
+                                # 测试对话
+                                test_state = step_info.get("test_state", {})
+                                if test_state:
+                                    test_chat = test_state.get("test_chat_history", [])
+                                    if test_chat:
+                                        for msg in test_chat:
+                                            role = "学生" if msg.get("role") == "user" else "AI"
+                                            content = msg.get("content", "")
+                                            if content:
+                                                user_rows.append({
+                                                    "角色": role,
+                                                    "内容": content,
+                                                    "用户名": username
+                                                })
+                    else:
+                        # 旧格式：无项目管理
+                        step_data = user_data.get("step_data", {})
+                        for step_id, step_info in step_data.items():
+                            # 聊天记录
+                            chat_history = step_info.get("chat_history", [])
+                            if chat_history:
+                                for msg in chat_history:
+                                    role = "学生" if msg.get("role") == "user" else "AI"
+                                    content = msg.get("content", "")
+                                    if content:
+                                        user_rows.append({
+                                            "角色": role,
+                                            "内容": content,
+                                            "用户名": username
+                                        })
+
+                            # 测试对话
+                            test_state = step_info.get("test_state", {})
+                            if test_state:
+                                test_chat = test_state.get("test_chat_history", [])
+                                if test_chat:
+                                    for msg in test_chat:
+                                        role = "学生" if msg.get("role") == "user" else "AI"
+                                        content = msg.get("content", "")
+                                        if content:
+                                            user_rows.append({
+                                                "角色": role,
+                                                "内容": content,
+                                                "用户名": username
+                                            })
+            except Exception as e:
+                # 跳过有问题的用户文件
+                continue
+
+            # 生成该用户的CSV
+            if user_rows:
+                output = io.StringIO()
+                fieldnames = ["角色", "内容", "用户名"]
+                writer = csv.DictWriter(output, fieldnames=fieldnames)
+                writer.writeheader()
+                for row in user_rows:
+                    writer.writerow(row)
+
+                # 添加UTF-8 BOM并转换为bytes
+                output.seek(0)
+                csv_content = '\ufeff' + output.getvalue()
+                csv_bytes = csv_content.encode('utf-8')
+
+                # 将CSV添加到ZIP文件
+                zip_file.writestr(f"{username}.csv", csv_bytes)
+
+    # 准备返回ZIP文件
+    zip_buffer.seek(0)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"batch_export_{timestamp}.zip"
+
+    return StreamingResponse(
+        iter([zip_buffer.getvalue()]),
+        media_type="application/zip",
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
+    )
+
 @router.post("/password")
 async def change_password(old_password: str, new_password: str):
     """修改管理员密码"""
     if not verify_admin_password(old_password):
         raise HTTPException(status_code=401, detail="原密码错误")
-    
+
     new_hash = hashlib.sha256(new_password.encode()).hexdigest()
     with open(ADMIN_PASSWORD_FILE, "w") as f:
         json.dump({"password_hash": new_hash}, f)
-    
+
     return {"success": True, "message": "密码已修改"}
 
 # ========== Prompt 预览 ==========
@@ -545,6 +954,122 @@ async def update_chat_mode(data: ChatModeUpdate):
 
     return {"success": True, "chat_mode": data.chat_mode, "message": f"聊天模式已切换为: {data.chat_mode}"}
 
+# ========== API提供商和模型配置管理 ==========
+class ApiProviderConfig(BaseModel):
+    api_provider: str  # "openrouter" or "volcengine"
+    api_key: str
+    api_endpoint: str
+    default_model: str
+    fast_model: str
+    vision_model: str
+    vision_model_enabled: bool = True
+    reasoning_effort: Optional[str] = "medium"  # 仅火山引擎使用
+
+@router.get("/api-config")
+async def get_api_config():
+    """获取当前API配置"""
+    config = load_api_config()
+
+    # 定义可用的API提供商
+    providers = [
+        {
+            "value": "openrouter",
+            "label": "OpenRouter",
+            "description": "支持多种开源模型，使用requests库调用",
+            "models": {
+                "default": [
+                    {"value": "deepseek/deepseek-chat", "label": "DeepSeek Chat"},
+                    {"value": "alibaba/qwen-turbo", "label": "Qwen Turbo"},
+                    {"value": "anthropic/claude-3.5-sonnet", "label": "Claude 3.5 Sonnet"},
+                    {"value": "openai/gpt-4o-mini", "label": "GPT-4o Mini"}
+                ],
+                "vision": [
+                    {"value": "openai/gpt-4o-mini", "label": "GPT-4o Mini"},
+                    {"value": "anthropic/claude-3.5-sonnet", "label": "Claude 3.5 Sonnet"},
+                    {"value": "google/gemini-pro-vision", "label": "Gemini Pro Vision"}
+                ]
+            },
+            "default_endpoint": "https://openrouter.ai/api/v1"
+        },
+        {
+            "value": "volcengine",
+            "label": "火山引擎豆包",
+            "description": "字节跳动的豆包模型，支持推理模式，使用OpenAI SDK调用",
+            "models": {
+                "default": [
+                    {"value": "doubao-seed-1-6-lite-251015", "label": "豆包 Seed 1.6 Lite"},
+                    {"value": "doubao-pro-32k", "label": "豆包 Pro 32K"},
+                    {"value": "doubao-lite-32k", "label": "豆包 Lite 32K"}
+                ],
+                "vision": [
+                    {"value": "doubao-seed-1-6-lite-251015", "label": "豆包 Seed 1.6 Lite (支持图片)"},
+                    {"value": "doubao-pro-32k", "label": "豆包 Pro 32K (支持图片)"}
+                ]
+            },
+            "default_endpoint": "https://ark.cn-beijing.volces.com/api/v3",
+            "reasoning_efforts": [
+                {"value": "low", "label": "低强度", "description": "快速推理，适合简单任务"},
+                {"value": "medium", "label": "中等强度", "description": "平衡速度和质量"},
+                {"value": "high", "label": "高强度", "description": "深度推理，适合复杂任务"}
+            ]
+        }
+    ]
+
+    return {
+        "current_config": {
+            "api_provider": config.get("api_provider", "openrouter"),
+            "api_key": config.get("api_key", ""),
+            "api_endpoint": config.get("api_endpoint", ""),
+            "default_model": config.get("default_model", ""),
+            "fast_model": config.get("fast_model", ""),
+            "vision_model": config.get("vision_model", ""),
+            "vision_model_enabled": config.get("vision_model_enabled", True),
+            "reasoning_effort": config.get("reasoning_effort", "medium"),
+            "chat_mode": config.get("chat_mode", "single_agent"),
+            "debug_mode": config.get("debug_mode", True)
+        },
+        "providers": providers
+    }
+
+@router.put("/api-config")
+async def update_api_config(data: ApiProviderConfig):
+    """更新API配置"""
+    # 验证API提供商
+    if data.api_provider not in ["openrouter", "volcengine"]:
+        raise HTTPException(status_code=400, detail="无效的API提供商")
+
+    # 加载现有配置
+    config = load_api_config()
+
+    # 更新配置
+    config["api_provider"] = data.api_provider
+    config["api_key"] = data.api_key
+    config["api_endpoint"] = data.api_endpoint
+    config["default_model"] = data.default_model
+    config["fast_model"] = data.fast_model
+    config["vision_model"] = data.vision_model
+    config["vision_model_enabled"] = data.vision_model_enabled
+
+    # 如果是火山引擎，保存reasoning_effort
+    if data.api_provider == "volcengine":
+        config["reasoning_effort"] = data.reasoning_effort or "medium"
+
+    # 保存配置
+    config_path = DATA_DIR / "api_key_config.json"
+    with open(config_path, "w", encoding="utf-8") as f:
+        json.dump(config, f, ensure_ascii=False, indent=4)
+
+    return {
+        "success": True,
+        "message": f"API配置已更新为: {data.api_provider}",
+        "config": {
+            "api_provider": data.api_provider,
+            "default_model": data.default_model,
+            "fast_model": data.fast_model,
+            "vision_model": data.vision_model
+        }
+    }
+
 # ========== Pipeline 流程管理 ==========
 from config import get_active_pipeline_id, set_active_pipeline_id
 from services.pipeline_service import (
@@ -566,7 +1091,7 @@ class PipelineStepModel(BaseModel):
     name: str
     type: str  # extract, reply, extract_and_reply
     model: str = "default"  # fast, default, vision
-    prompt_template: str | None = None
+    prompt_template: Optional[str] = None
     context_from: List[str] = []
 
 class PipelineOutputModel(BaseModel):
@@ -667,8 +1192,8 @@ async def get_step_default_prompt(step_type: str):
 
 class CopyPipelineRequest(BaseModel):
     source_id: str
-    new_id: str | None = None
-    new_name: str | None = None
+    new_id: Optional[str] = None
+    new_name: Optional[str] = None
 
 
 @router.post("/pipelines/copy-with-prompts")

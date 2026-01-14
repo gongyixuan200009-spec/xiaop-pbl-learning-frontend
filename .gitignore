@@ -40,3 +40,29 @@ backend/data/api_key_config.json
 backend/data/user_progress/
 backend/data/uploads/
 backend/data/form_data/*.csv
+backend/data/users.json
+backend/data/prompt_history.json
+
+# Deployment artifacts
+deploy_update.tar.gz
+backups/
+backup_*/
+zeabur-deploy-packages/
+
+# Migration scripts (temporary)
+backend/scripts/migrate_*.py
+backend/scripts/check_*.py
+backend/scripts/test_*.py
+backend/scripts/try_*.py
+backend/scripts/execute_*.py
+backend/scripts/auto_migrate*.py
+backend/scripts/complete_migration.py
+backend/scripts/*.sql
+
+# Documentation (keep only essential ones)
+*_SUMMARY.md
+*_REPORT.md
+*_GUIDE.md
+*_STATUS.md
+EXECUTE_THIS_SQL.txt
+SCHEMA_CACHE_ISSUE.md

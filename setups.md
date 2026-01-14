@@ -5,7 +5,8 @@
 - **创建时间**: 2026-01-06
 - **服务器**: 阿里云 ECS (182.92.239.199)
 - **系统**: Ubuntu
-- **更新时间**: 2026-01-06
+- **更新时间**: 2026-01-09
+- **进程管理**: systemd (已配置自动重启和开机自启)
 
 ---
 
@@ -179,6 +180,153 @@ server {
 
 ## 🚀 服务配置
 
+> **⚠️ 重要更新 (2026-01-09)**: 所有服务已迁移到 systemd 管理，支持自动重启和开机自启。不再使用 nohup 手动启动方式。
+
+### 🔄 Systemd 服务管理（推荐方式）
+
+所有服务现已通过 systemd 进行管理，提供以下功能：
+- ✅ **自动重启**: 服务崩溃后 10 秒自动重启
+- ✅ **开机自启**: 服务器重启后自动启动
+- ✅ **日志管理**: 统一使用 journalctl 查看日志
+- ✅ **统一管理**: 与 nginx 等系统服务使用相同的管理方式
+- ✅ **健康检查**: 每分钟自动检测服务状态，异常时自动重启
+
+#### 服务列表
+
+| 服务名称 | 端口 | 配置文件 | 状态 |
+|---------|------|---------|------|
+| xiaop-backend.service | 8000 | /etc/systemd/system/xiaop-backend.service | ✅ 运行中 |
+| xiaop-frontend.service | 8504 | /etc/systemd/system/xiaop-frontend.service | ✅ 运行中 |
+| xiaop-healthcheck.timer | - | /etc/systemd/system/xiaop-healthcheck.timer | ✅ 运行中 (每分钟) |
+
+#### 常用管理命令
+
+```bash
+# 查看服务状态
+systemctl status xiaop-backend.service
+systemctl status xiaop-frontend.service
+systemctl status xiaop-*.service  # 查看所有 xiaop 服务
+
+# 启动服务
+systemctl start xiaop-backend.service
+systemctl start xiaop-frontend.service
+
+# 停止服务
+systemctl stop xiaop-backend.service
+systemctl stop xiaop-frontend.service
+
+# 重启服务
+systemctl restart xiaop-backend.service
+systemctl restart xiaop-frontend.service
+systemctl restart xiaop-*.service  # 重启所有 xiaop 服务
+
+# 查看日志
+journalctl -u xiaop-backend.service -f      # 实时查看后端日志
+journalctl -u xiaop-frontend.service -f     # 实时查看前端日志
+journalctl -u xiaop-backend.service -n 50   # 查看最近 50 条日志
+
+# 启用/禁用开机自启
+systemctl enable xiaop-backend.service
+systemctl disable xiaop-backend.service
+```
+
+#### Systemd 配置文件
+
+**后端服务配置** (`/etc/systemd/system/xiaop-backend.service`):
+```ini
+[Unit]
+Description=Xiaop Backend Service (FastAPI)
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/workspace/xiaop-v2-dev-deploy/backend
+ExecStart=/root/workspace/xiaop-v2-dev-deploy/backend/venv/bin/python -m uvicorn main:app --host 0.0.0.0 --port 8000
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+```
+
+**前端服务配置** (`/etc/systemd/system/xiaop-frontend.service`):
+```ini
+[Unit]
+Description=Xiaop Frontend Service (http-server)
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/workspace/xiaop-v2-dev-deploy/frontend/out
+ExecStart=/usr/bin/http-server -p 8504
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+```
+
+**修改配置后的操作**:
+```bash
+# 重新加载 systemd 配置
+systemctl daemon-reload
+
+# 重启服务使配置生效
+systemctl restart xiaop-backend.service
+systemctl restart xiaop-frontend.service
+```
+
+#### 健康检查配置
+
+系统已配置自动健康检查，每分钟检测一次服务状态：
+
+**健康检查脚本**: `/usr/local/bin/xiaop-healthcheck.sh`
+- 检查前端服务 (http://127.0.0.1:8504)
+- 检查后端服务 (http://127.0.0.1:8000/docs)
+- 如果服务无响应，自动重启服务
+- 日志记录到 `/var/log/xiaop-healthcheck.log`
+
+**定时任务配置**:
+- Service: `xiaop-healthcheck.service`
+- Timer: `xiaop-healthcheck.timer`
+- 执行频率: 每 1 分钟
+- 开机自启: 已启用
+
+**管理命令**:
+```bash
+# 查看健康检查 timer 状态
+systemctl status xiaop-healthcheck.timer
+
+# 查看健康检查日志
+tail -f /var/log/xiaop-healthcheck.log
+journalctl -u xiaop-healthcheck.service -f
+
+# 手动执行健康检查
+/usr/local/bin/xiaop-healthcheck.sh
+
+# 查看下次执行时间
+systemctl list-timers xiaop-healthcheck.timer
+
+# 停止/启动健康检查
+systemctl stop xiaop-healthcheck.timer
+systemctl start xiaop-healthcheck.timer
+```
+
+**健康检查逻辑**:
+1. 每分钟自动检查前端和后端服务
+2. 使用 HTTP 请求测试服务响应（超时 5 秒）
+3. 如果服务无响应，自动执行 `systemctl restart`
+4. 重启后再次检查，记录成功或失败状态
+5. 所有操作记录到日志文件
+
+---
+
 ### 后端服务 (FastAPI)
 
 - **端口**: 8000
@@ -197,33 +345,16 @@ server {
 - **状态**: ✅ 运行中
 - **说明**: 静态文件服务器，仅支持 GET/HEAD 方法
 
-### 服务管理命令
+### ~~服务管理命令~~ (已废弃)
 
-**查看服务状态**:
-```bash
-# 查看后端服务
-ps aux | grep uvicorn | grep -v grep
-
-# 查看前端服务
-ps aux | grep http-server | grep -v grep
-
-# 查看端口占用
-netstat -tlnp | grep -E '(8000|8504)'
-```
-
-
-**重启服务**:
-```bash
-# 重启后端服务
-cd /root/workspace/xiaop-v2-dev-deploy/backend
-pkill -f "uvicorn main:app"
-nohup venv/bin/uvicorn main:app --host 0.0.0.0 --port 8000 > backend.log 2>&1 &
-
-# 重启前端服务
-pkill -f "http-server"
-cd /root/workspace/xiaop-v2-dev-deploy/frontend/out
-nohup http-server -p 8504 > /dev/null 2>&1 &
-```
+> **⚠️ 已废弃**: 此部分命令已过时，请使用上方的 **Systemd 服务管理** 方式。
+>
+> 新的 systemd 管理方式提供：
+> - 自动重启和开机自启
+> - 统一的日志管理
+> - 更可靠的进程管理
+>
+> 请参考上方 [🔄 Systemd 服务管理](#-systemd-服务管理推荐方式) 部分。
 
 ---
 
@@ -309,16 +440,19 @@ tail -f /var/log/nginx/error.log
 
 **检查步骤**:
 ```bash
-# 1. 检查前端服务是否运行
-ps aux | grep http-server
+# 1. 检查前端服务状态（使用 systemd）
+systemctl status xiaop-frontend.service
 
-# 2. 检查端口是否监听
+# 2. 查看前端服务日志
+journalctl -u xiaop-frontend.service -n 50
+
+# 3. 检查端口是否监听
 netstat -tlnp | grep 8504
 
-# 3. 测试本地访问
+# 4. 测试本地访问
 curl -I http://127.0.0.1:8504
 
-# 4. 检查 Nginx 代理
+# 5. 检查 Nginx 代理
 curl -I http://127.0.0.1/
 ```
 
@@ -327,16 +461,17 @@ curl -I http://127.0.0.1/
 
 **检查步骤**:
 ```bash
-# 1. 检查后端服务
-ps aux | grep uvicorn
+# 1. 检查后端服务状态（使用 systemd）
+systemctl status xiaop-backend.service
 
-# 2. 测试后端 API
+# 2. 查看后端服务日志
+journalctl -u xiaop-backend.service -n 50
+journalctl -u xiaop-backend.service -f  # 实时查看
+
+# 3. 测试后端 API
 curl -X POST http://127.0.0.1:8000/api/admin/login \
   -H 'Content-Type: application/json' \
   -d '{"password":"test"}'
-
-# 3. 查看后端日志
-tail -f /root/workspace/xiaop-v2-dev-deploy/backend/backend.log
 ```
 
 ---
@@ -357,10 +492,11 @@ npm install
 # 3. 构建
 npm run build
 
-# 4. 重启服务
-pkill -f "http-server"
-cd out
-nohup http-server -p 8504 > /dev/null 2>&1 &
+# 4. 重启服务（使用 systemd）
+systemctl restart xiaop-frontend.service
+
+# 5. 查看服务状态
+systemctl status xiaop-frontend.service
 ```
 
 
@@ -378,12 +514,12 @@ source venv/bin/activate
 # 3. 安装依赖（如有新依赖）
 pip install -r requirements.txt
 
-# 4. 重启服务
-pkill -f "uvicorn main:app"
-nohup venv/bin/uvicorn main:app --host 0.0.0.0 --port 8000 > backend.log 2>&1 &
+# 4. 重启服务（使用 systemd）
+systemctl restart xiaop-backend.service
 
-# 5. 查看日志
-tail -f backend.log
+# 5. 查看服务状态和日志
+systemctl status xiaop-backend.service
+journalctl -u xiaop-backend.service -n 50
 ```
 
 
@@ -437,20 +573,19 @@ NEXT_PUBLIC_API_URL=http://pbl-learning-bg.xiaoluxue.com
 - 实际运行的是手动启动的 Nginx 进程
 - 建议修复：停止手动进程，使用 systemd 管理
 
-### 4. 服务器重启后的恢复
+### 4. 服务器重启后的恢复 ✅
 
-服务器重启后需要手动启动服务：
+**已配置自动启动**: 所有服务已通过 systemd 配置开机自启，服务器重启后会自动启动。
+
+无需手动操作，systemd 会自动启动：
+- `xiaop-backend.service` (后端服务)
+- `xiaop-frontend.service` (前端服务)
+
+如需验证服务状态：
 ```bash
-# 启动后端
-cd /root/workspace/xiaop-v2-dev-deploy/backend
-nohup venv/bin/uvicorn main:app --host 0.0.0.0 --port 8000 > backend.log 2>&1 &
-
-# 启动前端
-cd /root/workspace/xiaop-v2-dev-deploy/frontend/out
-nohup http-server -p 8504 > /dev/null 2>&1 &
+# 查看所有 xiaop 服务状态
+systemctl status xiaop-*.service
 ```
-
-建议配置 systemd 服务实现自动启动。
 
 
 ---

@@ -44,6 +44,7 @@ export function ChatContainer() {
     addTestMessage,
     setTestPassed,
     setTestState,
+    cleanInvalidMessages,
   } = useChatStore();
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -58,6 +59,8 @@ export function ChatContainer() {
   const [isStartingTest, setIsStartingTest] = useState(false);
   const [testStreamingContent, setTestStreamingContent] = useState<string>("");
   const [isTestStreaming, setIsTestStreaming] = useState(false);
+  const [showResetConfirm, setShowResetConfirm] = useState(false);
+  const [isResetting, setIsResetting] = useState(false);
   const lastScrollTime = useRef(0);
 
   const currentForm = getCurrentForm();
@@ -239,7 +242,24 @@ export function ChatContainer() {
             console.error("流式消息失败:", error);
             setStreamingContent("");
             setIsStreaming(false);
-            // 确保错误消息是字符串
+
+            // 检查是否是验证错误
+            if (error && (error as any).isValidationError) {
+              console.warn("[硬性容错] 检测到验证错误，清理历史记录并准备重试");
+
+              // 清理无效消息
+              cleanInvalidMessages();
+
+              // 显示友好的错误提示
+              addMessage({
+                role: "assistant",
+                content: "检测到历史记录中有无效数据，已自动清理。请重新发送您的消息。",
+              });
+              setLoading(false);
+              return;
+            }
+
+            // 普通错误处理
             let errorMsg = "抱歉，我遇到了一些问题，请稍后再试~";
             if (error && error.message) {
               errorMsg = typeof error.message === 'string' ? error.message : String(error.message);
@@ -257,7 +277,24 @@ export function ChatContainer() {
       console.error("发送消息失败:", error);
       setStreamingContent("");
       setIsStreaming(false);
-      // 确保错误消息是字符串
+
+      // 检查是否是验证错误
+      if (error && error.isValidationError) {
+        console.warn("[硬性容错] 检测到验证错误，清理历史记录并准备重试");
+
+        // 清理无效消息
+        cleanInvalidMessages();
+
+        // 显示友好的错误提示
+        addMessage({
+          role: "assistant",
+          content: "检测到历史记录中有无效数据，已自动清理。请重新发送您的消息。",
+        });
+        setLoading(false);
+        return;
+      }
+
+      // 普通错误处理
       let errorMsg = "抱歉，我遇到了一些问题，请稍后再试~";
       if (error && error.message) {
         errorMsg = typeof error.message === 'string' ? error.message : String(error.message);
@@ -371,6 +408,24 @@ export function ChatContainer() {
             console.error("测试消息失败:", error);
             setTestStreamingContent("");
             setIsTestStreaming(false);
+
+            // 检查是否是验证错误
+            if (error && (error as any).isValidationError) {
+              console.warn("[硬性容错] 检测到测试消息验证错误，清理历史记录");
+
+              // 清理无效消息
+              cleanInvalidMessages();
+
+              // 显示友好的错误提示
+              addTestMessage({
+                role: "assistant",
+                content: "检测到历史记录中有无效数据，已自动清理。请重新发送您的消息。",
+              });
+              setLoading(false);
+              return;
+            }
+
+            // 普通错误处理
             let errorMsg = "抱歉，我遇到了一些问题，请稍后再试~";
             if (error && error.message) {
               errorMsg = typeof error.message === 'string' ? error.message : String(error.message);
@@ -387,6 +442,24 @@ export function ChatContainer() {
       console.error("自动发送测试消息失败:", error);
       setTestStreamingContent("");
       setIsTestStreaming(false);
+
+      // 检查是否是验证错误
+      if (error && error.isValidationError) {
+        console.warn("[硬性容错] 检测到测试消息验证错误，清理历史记录");
+
+        // 清理无效消息
+        cleanInvalidMessages();
+
+        // 显示友好的错误提示
+        addTestMessage({
+          role: "assistant",
+          content: "检测到历史记录中有无效数据，已自动清理。请重新发送您的消息。",
+        });
+        setLoading(false);
+        return;
+      }
+
+      // 普通错误处理
       let errorMsg = "抱歉，我遇到了一些问题，请稍后再试~";
       if (error && error.message) {
         errorMsg = typeof error.message === 'string' ? error.message : String(error.message);
@@ -445,6 +518,24 @@ export function ChatContainer() {
             console.error("测试消息失败:", error);
             setTestStreamingContent("");
             setIsTestStreaming(false);
+
+            // 检查是否是验证错误
+            if (error && (error as any).isValidationError) {
+              console.warn("[硬性容错] 检测到测试消息验证错误，清理历史记录");
+
+              // 清理无效消息
+              cleanInvalidMessages();
+
+              // 显示友好的错误提示
+              addTestMessage({
+                role: "assistant",
+                content: "检测到历史记录中有无效数据，已自动清理。请重新发送您的消息。",
+              });
+              setLoading(false);
+              return;
+            }
+
+            // 普通错误处理
             let errorMsg = "抱歉，我遇到了一些问题，请稍后再试~";
             if (error && error.message) {
               errorMsg = typeof error.message === 'string' ? error.message : String(error.message);
@@ -462,6 +553,24 @@ export function ChatContainer() {
       console.error("发送测试消息失败:", error);
       setTestStreamingContent("");
       setIsTestStreaming(false);
+
+      // 检查是否是验证错误
+      if (error && error.isValidationError) {
+        console.warn("[硬性容错] 检测到测试消息验证错误，清理历史记录");
+
+        // 清理无效消息
+        cleanInvalidMessages();
+
+        // 显示友好的错误提示
+        addTestMessage({
+          role: "assistant",
+          content: "检测到历史记录中有无效数据，已自动清理。请重新发送您的消息。",
+        });
+        setLoading(false);
+        return;
+      }
+
+      // 普通错误处理
       let errorMsg = "抱歉，我遇到了一些问题，请稍后再试~";
       if (error && error.message) {
         errorMsg = typeof error.message === 'string' ? error.message : String(error.message);
@@ -471,6 +580,37 @@ export function ChatContainer() {
         content: errorMsg,
       });
       setLoading(false);
+    }
+  };
+
+  // 重置当前阶段
+  const handleResetStep = async () => {
+    if (!token || isResetting) return;
+
+    setIsResetting(true);
+    try {
+      const response = await chatAPI.resetStep(token, currentFormId);
+
+      if (response.success) {
+        // 重新加载阶段数据
+        const stepData = await chatAPI.getStepData(token, currentFormId);
+        setStepData(currentFormId, stepData as any);
+
+        // 重新加载用户进度
+        const progress = await chatAPI.getUserProgress(token);
+        setUserProgress(
+          progress.current_step,
+          progress.completed_steps,
+          progress.step_data as Record<number, any>
+        );
+
+        // 关闭确认对话框
+        setShowResetConfirm(false);
+      }
+    } catch (error) {
+      console.error("重置阶段失败:", error);
+    } finally {
+      setIsResetting(false);
     }
   };
 
@@ -564,21 +704,49 @@ export function ChatContainer() {
           className="bg-white/80 backdrop-blur-xl border-b border-[#d2d2d7]/30 overflow-hidden flex-shrink-0"
           initial={false}
         >
-          <button
-            onClick={() => setProgressExpanded(!progressExpanded)}
-            className="w-full flex items-center justify-between md:hidden"
-            style={{ padding: "var(--space-sm) var(--space-md)", fontSize: "var(--text-xs)" }}
-          >
-            <span className="text-[#1d1d1f] font-medium">
-              任务进度 ({completedCount}/{totalCount})
-            </span>
-            <motion.span
-              animate={{ rotate: progressExpanded ? 180 : 0 }}
-              transition={{ duration: 0.2 }}
+          <div className="flex items-center justify-between w-full" style={{ padding: "var(--space-sm) var(--space-md)" }}>
+            <button
+              onClick={() => setProgressExpanded(!progressExpanded)}
+              className="flex items-center gap-2 md:hidden flex-1"
+              style={{ fontSize: "var(--text-xs)" }}
             >
-              <ChevronDown style={{ width: "var(--icon-sm)", height: "var(--icon-sm)" }} className="text-[#86868b]" />
-            </motion.span>
-          </button>
+              <span className="text-[#1d1d1f] font-medium">
+                任务进度 ({completedCount}/{totalCount})
+              </span>
+              <motion.span
+                animate={{ rotate: progressExpanded ? 180 : 0 }}
+                transition={{ duration: 0.2 }}
+              >
+                <ChevronDown style={{ width: "var(--icon-sm)", height: "var(--icon-sm)" }} className="text-[#86868b]" />
+              </motion.span>
+            </button>
+
+            {/* Desktop title */}
+            <div className="hidden md:block text-[#1d1d1f] font-medium" style={{ fontSize: "var(--text-xs)" }}>
+              任务进度 ({completedCount}/{totalCount})
+            </div>
+
+            {/* Reset button - only show if not confirmed and has data */}
+            {(() => {
+              const hasData = chatHistory.length > 0 || Object.keys(extractedFields).length > 0;
+              console.log('[DEBUG] Reset button visibility:', {
+                isCurrentStepConfirmed,
+                chatHistoryLength: chatHistory.length,
+                extractedFieldsCount: Object.keys(extractedFields).length,
+                hasData,
+                shouldShow: !isCurrentStepConfirmed && hasData
+              });
+              return !isCurrentStepConfirmed && hasData ? (
+                <button
+                  onClick={() => setShowResetConfirm(true)}
+                  className="text-[#ff3b30] hover:text-[#ff453a] font-medium transition-colors"
+                  style={{ fontSize: "var(--text-xs)" }}
+                >
+                  重置
+                </button>
+              ) : null;
+            })()}
+          </div>
 
           <AnimatePresence initial={false}>
             {progressExpanded && (
@@ -969,6 +1137,60 @@ export function ChatContainer() {
                 )}
               </motion.button>
             </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Reset confirmation dialog */}
+      <AnimatePresence>
+        {showResetConfirm && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-black/50 flex items-center justify-center z-50"
+            style={{ padding: "var(--space-md)" }}
+            onClick={() => setShowResetConfirm(false)}
+          >
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="bg-white rounded-vw-lg shadow-2xl max-w-md w-full"
+              style={{ padding: "var(--space-lg)" }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <h3 className="text-[#1d1d1f] font-semibold" style={{ fontSize: "var(--text-base)", marginBottom: "var(--space-sm)" }}>
+                确认重置阶段？
+              </h3>
+              <p className="text-[#86868b]" style={{ fontSize: "var(--text-sm)", marginBottom: "var(--space-lg)" }}>
+                重置后将清除本阶段的所有聊天记录、提取字段和测试状态。此操作无法撤销。
+              </p>
+              <div className="flex gap-3">
+                <button
+                  onClick={() => setShowResetConfirm(false)}
+                  className="flex-1 bg-[#f5f5f7] text-[#1d1d1f] rounded-full font-medium hover:bg-[#e8e8ed] transition-colors"
+                  style={{ padding: "var(--space-sm) var(--space-md)", fontSize: "var(--text-sm)" }}
+                >
+                  取消
+                </button>
+                <button
+                  onClick={handleResetStep}
+                  disabled={isResetting}
+                  className="flex-1 bg-[#ff3b30] text-white rounded-full font-medium hover:bg-[#ff453a] transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+                  style={{ padding: "var(--space-sm) var(--space-md)", fontSize: "var(--text-sm)" }}
+                >
+                  {isResetting ? (
+                    <>
+                      <Loader2 className="animate-spin" style={{ width: "var(--icon-sm)", height: "var(--icon-sm)" }} />
+                      <span>重置中...</span>
+                    </>
+                  ) : (
+                    "确认重置"
+                  )}
+                </button>
+              </div>
+            </motion.div>
           </motion.div>
         )}
       </AnimatePresence>

@@ -1,178 +1,285 @@
-"""用户进度管理服务 - 保存和管理每个用户的阶段进度（支持多项目）"""
-import json
-import uuid
-from pathlib import Path
+"""
+用户进度管理服务 - 使用 Supabase 数据库
+保存和管理每个用户的阶段进度（支持多项目）
+"""
+
 from typing import Dict, List, Optional
 from datetime import datetime
-from config import DATA_DIR
+from services.supabase_client import supabase
+
 
 class ProgressService:
     def __init__(self):
-        self.progress_dir = DATA_DIR / "user_progress"
-        self.progress_dir.mkdir(exist_ok=True)
+        self.client = supabase
 
-    def _get_user_file(self, username: str) -> Path:
-        return self.progress_dir / f"{username}.json"
+    def _get_user_id(self, username: str) -> Optional[str]:
+        """根据用户名获取用户ID"""
+        try:
+            result = self.client.table("users")\
+                .select("id")\
+                .eq("username", username)\
+                .execute()
 
-    def _load_user_data(self, username: str) -> dict:
-        """加载用户数据（包含所有项目）"""
-        file_path = self._get_user_file(username)
-        if file_path.exists():
-            with open(file_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                # 兼容旧数据：如果没有projects字段，迁移到多项目结构
-                if "projects" not in data:
-                    data = self._migrate_to_multi_project(data)
-                return data
-
-        # 新用户：创建默认项目
-        default_project_id = str(uuid.uuid4())[:8]
-        return {
-            "username": username,
-            "current_project_id": default_project_id,
-            "projects": {
-                default_project_id: {
-                    "id": default_project_id,
-                    "name": "默认项目",
-                    "current_step": 1,
-                    "completed_steps": [],
-                    "step_data": {},
-                    "created_at": datetime.now().isoformat(),
-                    "updated_at": datetime.now().isoformat()
-                }
-            },
-            "created_at": datetime.now().isoformat(),
-            "updated_at": datetime.now().isoformat()
-        }
-
-    def _migrate_to_multi_project(self, old_data: dict) -> dict:
-        """将旧的单项目数据迁移到多项目结构"""
-        default_project_id = str(uuid.uuid4())[:8]
-        return {
-            "username": old_data.get("username", ""),
-            "current_project_id": default_project_id,
-            "projects": {
-                default_project_id: {
-                    "id": default_project_id,
-                    "name": "默认项目",
-                    "current_step": old_data.get("current_step", 1),
-                    "completed_steps": old_data.get("completed_steps", []),
-                    "step_data": old_data.get("step_data", {}),
-                    "created_at": old_data.get("created_at", datetime.now().isoformat()),
-                    "updated_at": old_data.get("updated_at", datetime.now().isoformat())
-                }
-            },
-            "created_at": old_data.get("created_at", datetime.now().isoformat()),
-            "updated_at": datetime.now().isoformat()
-        }
-
-    def _get_current_project(self, data: dict) -> dict:
-        """获取当前项目数据"""
-        project_id = data.get("current_project_id")
-        if project_id and project_id in data["projects"]:
-            return data["projects"][project_id]
-        # 回退到第一个项目
-        if data["projects"]:
-            first_id = list(data["projects"].keys())[0]
-            return data["projects"][first_id]
-        return None
-
-    def _save_user_data(self, username: str, data: dict):
-        """保存用户进度数据"""
-        data["updated_at"] = datetime.now().isoformat()
-        file_path = self._get_user_file(username)
-        with open(file_path, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+            if result.data:
+                return result.data[0]["id"]
+            return None
+        except Exception as e:
+            print(f"❌ 获取用户ID失败: {e}")
+            return None
 
     # ========== 项目管理方法 ==========
 
     def get_projects(self, username: str) -> List[dict]:
         """获取用户所有项目列表"""
-        data = self._load_user_data(username)
-        projects = []
-        for project_id, project in data["projects"].items():
-            projects.append({
-                "id": project_id,
-                "name": project.get("name", "未命名项目"),
-                "current_step": project.get("current_step", 1),
-                "completed_steps": project.get("completed_steps", []),
-                "created_at": project.get("created_at"),
-                "updated_at": project.get("updated_at"),
-                "is_current": project_id == data.get("current_project_id")
-            })
-        return sorted(projects, key=lambda x: x.get("created_at", ""), reverse=True)
+        try:
+            user_id = self._get_user_id(username)
+            if not user_id:
+                return []
+
+            result = self.client.table("user_projects")\
+                .select("*")\
+                .eq("user_id", user_id)\
+                .order("created_at", desc=True)\
+                .execute()
+
+            if not result.data:
+                # 创建默认项目
+                default_project = self.create_project(username, "默认项目")
+                return [default_project] if default_project else []
+
+            projects = []
+            for project in result.data:
+                projects.append({
+                    "id": project["id"],
+                    "name": project["project_name"],
+                    "current_step": project.get("current_step", 1),
+                    "completed_steps": project.get("completed_steps", []),
+                    "created_at": project.get("created_at"),
+                    "updated_at": project.get("updated_at"),
+                    "is_current": project.get("is_active", False)
+                })
+
+            return projects
+
+        except Exception as e:
+            print(f"❌ 获取项目列表失败: {e}")
+            return []
 
     def get_current_project_id(self, username: str) -> str:
         """获取当前项目ID"""
-        data = self._load_user_data(username)
-        return data.get("current_project_id", "")
+        try:
+            user_id = self._get_user_id(username)
+            if not user_id:
+                return ""
 
-    def create_project(self, username: str, name: str) -> dict:
+            result = self.client.table("user_projects")\
+                .select("id")\
+                .eq("user_id", user_id)\
+                .eq("is_active", True)\
+                .execute()
+
+            if result.data:
+                return result.data[0]["id"]
+
+            # 如果没有活跃项目，返回第一个项目
+            all_projects = self.get_projects(username)
+            if all_projects:
+                project_id = all_projects[0]["id"]
+                self.switch_project(username, project_id)
+                return project_id
+
+            return ""
+
+        except Exception as e:
+            print(f"❌ 获取当前项目ID失败: {e}")
+            return ""
+
+    def create_project(self, username: str, name: str) -> Optional[dict]:
         """创建新项目"""
-        data = self._load_user_data(username)
-        project_id = str(uuid.uuid4())[:8]
+        try:
+            user_id = self._get_user_id(username)
+            if not user_id:
+                return None
 
-        new_project = {
-            "id": project_id,
-            "name": name,
-            "current_step": 1,
-            "completed_steps": [],
-            "step_data": {},
-            "created_at": datetime.now().isoformat(),
-            "updated_at": datetime.now().isoformat()
-        }
+            # 将所有现有项目设为非活跃
+            self.client.table("user_projects")\
+                .update({"is_active": False})\
+                .eq("user_id", user_id)\
+                .execute()
 
-        data["projects"][project_id] = new_project
-        data["current_project_id"] = project_id  # 自动切换到新项目
-        self._save_user_data(username, data)
+            # 创建新项目
+            data = {
+                "user_id": user_id,
+                "project_name": name,
+                "is_active": True,
+                "current_step": 1,
+                "completed_steps": []
+            }
 
-        return new_project
+            result = self.client.table("user_projects").insert(data).execute()
+
+            if result.data:
+                project = result.data[0]
+                return {
+                    "id": project["id"],
+                    "name": project["project_name"],
+                    "current_step": project.get("current_step", 1),
+                    "completed_steps": project.get("completed_steps", []),
+                    "created_at": project.get("created_at"),
+                    "updated_at": project.get("updated_at"),
+                    "is_current": True
+                }
+
+            return None
+
+        except Exception as e:
+            print(f"❌ 创建项目失败: {e}")
+            return None
 
     def switch_project(self, username: str, project_id: str) -> bool:
         """切换当前项目"""
-        data = self._load_user_data(username)
-        if project_id in data["projects"]:
-            data["current_project_id"] = project_id
-            self._save_user_data(username, data)
-            return True
-        return False
+        try:
+            user_id = self._get_user_id(username)
+            if not user_id:
+                return False
+
+            # 将所有项目设为非活跃
+            self.client.table("user_projects")\
+                .update({"is_active": False})\
+                .eq("user_id", user_id)\
+                .execute()
+
+            # 激活指定项目
+            result = self.client.table("user_projects")\
+                .update({"is_active": True})\
+                .eq("id", project_id)\
+                .eq("user_id", user_id)\
+                .execute()
+
+            return bool(result.data)
+
+        except Exception as e:
+            print(f"❌ 切换项目失败: {e}")
+            return False
 
     def delete_project(self, username: str, project_id: str) -> bool:
         """删除项目"""
-        data = self._load_user_data(username)
-        if project_id not in data["projects"]:
+        try:
+            user_id = self._get_user_id(username)
+            if not user_id:
+                return False
+
+            # 检查是否是最后一个项目
+            projects = self.get_projects(username)
+            if len(projects) <= 1:
+                return False
+
+            # 删除项目（级联删除相关的阶段数据）
+            result = self.client.table("user_projects")\
+                .delete()\
+                .eq("id", project_id)\
+                .eq("user_id", user_id)\
+                .execute()
+
+            if result.data:
+                # 如果删除的是当前项目，切换到另一个项目
+                current_id = self.get_current_project_id(username)
+                if not current_id:
+                    remaining_projects = self.get_projects(username)
+                    if remaining_projects:
+                        self.switch_project(username, remaining_projects[0]["id"])
+
+                return True
+
             return False
 
-        # 不能删除最后一个项目
-        if len(data["projects"]) <= 1:
+        except Exception as e:
+            print(f"❌ 删除项目失败: {e}")
             return False
-
-        del data["projects"][project_id]
-
-        # 如果删除的是当前项目，切换到另一个项目
-        if data["current_project_id"] == project_id:
-            data["current_project_id"] = list(data["projects"].keys())[0]
-
-        self._save_user_data(username, data)
-        return True
 
     def rename_project(self, username: str, project_id: str, name: str) -> bool:
         """重命名项目"""
-        data = self._load_user_data(username)
-        if project_id in data["projects"]:
-            data["projects"][project_id]["name"] = name
-            data["projects"][project_id]["updated_at"] = datetime.now().isoformat()
-            self._save_user_data(username, data)
-            return True
-        return False
-    
+        try:
+            user_id = self._get_user_id(username)
+            if not user_id:
+                return False
+
+            result = self.client.table("user_projects")\
+                .update({"project_name": name})\
+                .eq("id", project_id)\
+                .eq("user_id", user_id)\
+                .execute()
+
+            return bool(result.data)
+
+        except Exception as e:
+            print(f"❌ 重命名项目失败: {e}")
+            return False
+
     # ========== 阶段进度方法（基于当前项目）==========
 
     def get_user_progress(self, username: str) -> dict:
         """获取用户当前项目的整体进度"""
-        data = self._load_user_data(username)
-        project = self._get_current_project(data)
-        if not project:
+        try:
+            project_id = self.get_current_project_id(username)
+            if not project_id:
+                return {
+                    "current_step": 1,
+                    "completed_steps": [],
+                    "step_data": {},
+                    "current_project_id": "",
+                    "current_project_name": ""
+                }
+
+            result = self.client.table("user_projects")\
+                .select("*")\
+                .eq("id", project_id)\
+                .execute()
+
+            if not result.data:
+                return {
+                    "current_step": 1,
+                    "completed_steps": [],
+                    "step_data": {},
+                    "current_project_id": "",
+                    "current_project_name": ""
+                }
+
+            project = result.data[0]
+
+            # 获取所有阶段数据
+            step_data_result = self.client.table("project_step_data")\
+                .select("*")\
+                .eq("project_id", project_id)\
+                .execute()
+
+            step_data = {}
+            if step_data_result.data:
+                for step in step_data_result.data:
+                    step_data[str(step["form_id"])] = {
+                        "form_id": step["form_id"],
+                        "extracted_fields": step.get("extracted_fields", {}),
+                        "chat_history": step.get("chat_history", []),
+                        "is_confirmed": step.get("is_confirmed", False),
+                        "summary": step.get("summary", ""),
+                        "test_state": step.get("test_state", {
+                            "is_in_test": False,
+                            "test_passed": False,
+                            "test_chat_history": [],
+                            "test_credential": ""
+                        })
+                    }
+
+            return {
+                "current_step": project.get("current_step", 1),
+                "completed_steps": project.get("completed_steps", []),
+                "step_data": step_data,
+                "current_project_id": project_id,
+                "current_project_name": project.get("project_name", "")
+            }
+
+        except Exception as e:
+            print(f"❌ 获取用户进度失败: {e}")
             return {
                 "current_step": 1,
                 "completed_steps": [],
@@ -181,168 +288,319 @@ class ProgressService:
                 "current_project_name": ""
             }
 
-        return {
-            "current_step": project.get("current_step", 1),
-            "completed_steps": project.get("completed_steps", []),
-            "step_data": project.get("step_data", {}),
-            "current_project_id": data.get("current_project_id", ""),
-            "current_project_name": project.get("name", "默认项目")
-        }
-
     def get_step_data(self, username: str, form_id: int) -> Optional[dict]:
         """获取用户当前项目某个阶段的数据"""
-        data = self._load_user_data(username)
-        project = self._get_current_project(data)
-        if not project:
+        try:
+            project_id = self.get_current_project_id(username)
+            if not project_id:
+                return None
+
+            result = self.client.table("project_step_data")\
+                .select("*")\
+                .eq("project_id", project_id)\
+                .eq("form_id", form_id)\
+                .execute()
+
+            if result.data:
+                step = result.data[0]
+                return {
+                    "form_id": step["form_id"],
+                    "extracted_fields": step.get("extracted_fields", {}),
+                    "chat_history": step.get("chat_history", []),
+                    "is_confirmed": step.get("is_confirmed", False),
+                    "summary": step.get("summary", ""),
+                    "test_state": step.get("test_state", {
+                        "is_in_test": False,
+                        "test_passed": False,
+                        "test_chat_history": [],
+                        "test_credential": ""
+                    })
+                }
+
             return None
-        return project.get("step_data", {}).get(str(form_id))
+
+        except Exception as e:
+            print(f"❌ 获取阶段数据失败: {e}")
+            return None
+
+    def reset_step_data(self, username: str, form_id: int) -> bool:
+        """重置某个阶段的所有数据（聊天记录、提取字段、测试状态等）"""
+        try:
+            project_id = self.get_current_project_id(username)
+            if not project_id:
+                return False
+
+            # 删除阶段数据
+            self.client.table("project_step_data")\
+                .delete()\
+                .eq("project_id", project_id)\
+                .eq("form_id", form_id)\
+                .execute()
+
+            # 更新项目进度
+            project_result = self.client.table("user_projects")\
+                .select("current_step, completed_steps")\
+                .eq("id", project_id)\
+                .execute()
+
+            if project_result.data:
+                project = project_result.data[0]
+                completed_steps = project.get("completed_steps", [])
+                current_step = project.get("current_step", 1)
+
+                # 从已完成列表中移除
+                if form_id in completed_steps:
+                    completed_steps.remove(form_id)
+
+                # 回退当前步骤
+                if current_step > form_id:
+                    current_step = form_id
+
+                self.client.table("user_projects")\
+                    .update({
+                        "current_step": current_step,
+                        "completed_steps": completed_steps
+                    })\
+                    .eq("id", project_id)\
+                    .execute()
+
+            return True
+
+        except Exception as e:
+            print(f"❌ 重置阶段数据失败: {e}")
+            return False
 
     def save_step_data(self, username: str, form_id: int, extracted_fields: dict,
                        chat_history: list, is_confirmed: bool = False):
         """保存阶段数据到当前项目"""
-        data = self._load_user_data(username)
-        project = self._get_current_project(data)
-        if not project:
-            return
+        try:
+            project_id = self.get_current_project_id(username)
+            if not project_id:
+                return
 
-        project_id = data.get("current_project_id")
-        step_key = str(form_id)
+            # 检查是否已存在
+            existing = self.client.table("project_step_data")\
+                .select("id")\
+                .eq("project_id", project_id)\
+                .eq("form_id", form_id)\
+                .execute()
 
-        if "step_data" not in data["projects"][project_id]:
-            data["projects"][project_id]["step_data"] = {}
+            data = {
+                "project_id": project_id,
+                "form_id": form_id,
+                "extracted_fields": extracted_fields,
+                "chat_history": chat_history,
+                "is_confirmed": is_confirmed
+            }
 
-        data["projects"][project_id]["step_data"][step_key] = {
-            "form_id": form_id,
-            "extracted_fields": extracted_fields,
-            "chat_history": chat_history,
-            "is_confirmed": is_confirmed,
-            "updated_at": datetime.now().isoformat()
-        }
+            if existing.data:
+                # 更新
+                self.client.table("project_step_data")\
+                    .update(data)\
+                    .eq("project_id", project_id)\
+                    .eq("form_id", form_id)\
+                    .execute()
+            else:
+                # 插入
+                self.client.table("project_step_data").insert(data).execute()
 
-        data["projects"][project_id]["updated_at"] = datetime.now().isoformat()
-        self._save_user_data(username, data)
+        except Exception as e:
+            print(f"❌ 保存阶段数据失败: {e}")
 
     def confirm_step(self, username: str, form_id: int, summary: str) -> bool:
         """确认完成某个阶段，解锁下一阶段（当前项目）"""
-        data = self._load_user_data(username)
-        project = self._get_current_project(data)
-        if not project:
+        try:
+            project_id = self.get_current_project_id(username)
+            if not project_id:
+                return False
+
+            # 更新阶段数据
+            self.client.table("project_step_data")\
+                .update({
+                    "is_confirmed": True,
+                    "summary": summary
+                })\
+                .eq("project_id", project_id)\
+                .eq("form_id", form_id)\
+                .execute()
+
+            # 更新项目进度
+            project_result = self.client.table("user_projects")\
+                .select("current_step, completed_steps")\
+                .eq("id", project_id)\
+                .execute()
+
+            if project_result.data:
+                project = project_result.data[0]
+                completed_steps = project.get("completed_steps", [])
+                current_step = project.get("current_step", 1)
+
+                # 添加到已完成列表
+                if form_id not in completed_steps:
+                    completed_steps.append(form_id)
+
+                # 解锁下一阶段
+                if form_id >= current_step:
+                    current_step = form_id + 1
+
+                self.client.table("user_projects")\
+                    .update({
+                        "current_step": current_step,
+                        "completed_steps": completed_steps
+                    })\
+                    .eq("id", project_id)\
+                    .execute()
+
+            return True
+
+        except Exception as e:
+            print(f"❌ 确认阶段失败: {e}")
             return False
-
-        project_id = data.get("current_project_id")
-        step_key = str(form_id)
-
-        # 检查该阶段是否已有数据
-        if step_key not in project.get("step_data", {}):
-            return False
-
-        # 更新阶段数据
-        data["projects"][project_id]["step_data"][step_key]["is_confirmed"] = True
-        data["projects"][project_id]["step_data"][step_key]["summary"] = summary
-        data["projects"][project_id]["step_data"][step_key]["confirmed_at"] = datetime.now().isoformat()
-
-        # 添加到已完成列表
-        if "completed_steps" not in data["projects"][project_id]:
-            data["projects"][project_id]["completed_steps"] = []
-        if form_id not in data["projects"][project_id]["completed_steps"]:
-            data["projects"][project_id]["completed_steps"].append(form_id)
-
-        # 解锁下一阶段
-        current_step = data["projects"][project_id].get("current_step", 1)
-        if form_id >= current_step:
-            data["projects"][project_id]["current_step"] = form_id + 1
-
-        data["projects"][project_id]["updated_at"] = datetime.now().isoformat()
-        self._save_user_data(username, data)
-        return True
 
     def can_access_step(self, username: str, form_id: int) -> bool:
         """检查用户是否可以访问当前项目的某个阶段"""
-        data = self._load_user_data(username)
-        project = self._get_current_project(data)
-        if not project:
+        try:
+            project_id = self.get_current_project_id(username)
+            if not project_id:
+                return form_id == 1
+
+            result = self.client.table("user_projects")\
+                .select("current_step")\
+                .eq("id", project_id)\
+                .execute()
+
+            if result.data:
+                current_step = result.data[0].get("current_step", 1)
+                return form_id <= current_step
+
             return form_id == 1
-        return form_id <= project.get("current_step", 1)
+
+        except Exception as e:
+            print(f"❌ 检查阶段访问权限失败: {e}")
+            return form_id == 1
 
     def get_previous_summaries(self, username: str, current_form_id: int) -> List[dict]:
         """获取当前项目中当前阶段之前所有已完成阶段的总结"""
-        data = self._load_user_data(username)
-        project = self._get_current_project(data)
-        if not project:
-            return []
+        try:
+            project_id = self.get_current_project_id(username)
+            if not project_id:
+                return []
 
-        summaries = []
-        completed_steps = project.get("completed_steps", [])
-        step_data = project.get("step_data", {})
+            # 获取所有已确认的阶段数据
+            result = self.client.table("project_step_data")\
+                .select("*")\
+                .eq("project_id", project_id)\
+                .eq("is_confirmed", True)\
+                .lt("form_id", current_form_id)\
+                .order("form_id")\
+                .execute()
 
-        for form_id in sorted(completed_steps):
-            if form_id < current_form_id:
-                step = step_data.get(str(form_id))
-                if step and step.get("is_confirmed"):
+            summaries = []
+            if result.data:
+                for step in result.data:
                     summaries.append({
-                        "form_id": form_id,
+                        "form_id": step["form_id"],
                         "summary": step.get("summary", ""),
                         "extracted_fields": step.get("extracted_fields", {})
                     })
 
-        return summaries
+            return summaries
+
+        except Exception as e:
+            print(f"❌ 获取前置总结失败: {e}")
+            return []
 
     def reset_step(self, username: str, form_id: int):
         """重置当前项目某个阶段的数据（仅允许重置未确认的阶段）"""
-        data = self._load_user_data(username)
-        project = self._get_current_project(data)
-        if not project:
-            return
+        try:
+            project_id = self.get_current_project_id(username)
+            if not project_id:
+                return
 
-        project_id = data.get("current_project_id")
-        step_key = str(form_id)
-        step_data = project.get("step_data", {})
+            # 检查是否已确认
+            result = self.client.table("project_step_data")\
+                .select("is_confirmed")\
+                .eq("project_id", project_id)\
+                .eq("form_id", form_id)\
+                .execute()
 
-        if step_key in step_data:
-            # 只清除未确认的数据
-            if not step_data[step_key].get("is_confirmed"):
-                del data["projects"][project_id]["step_data"][step_key]
-                self._save_user_data(username, data)
+            if result.data and not result.data[0].get("is_confirmed"):
+                # 只清除未确认的数据
+                self.client.table("project_step_data")\
+                    .delete()\
+                    .eq("project_id", project_id)\
+                    .eq("form_id", form_id)\
+                    .execute()
+
+        except Exception as e:
+            print(f"❌ 重置阶段失败: {e}")
 
     def save_test_state(self, username: str, form_id: int, is_in_test: bool = False,
                         test_passed: bool = False, test_chat_history: list = None,
                         test_credential: str = ""):
         """保存当前项目的测试状态"""
-        data = self._load_user_data(username)
-        project = self._get_current_project(data)
-        if not project:
-            return
+        try:
+            project_id = self.get_current_project_id(username)
+            if not project_id:
+                return
 
-        project_id = data.get("current_project_id")
-        step_key = str(form_id)
+            test_state = {
+                "is_in_test": is_in_test,
+                "test_passed": test_passed,
+                "test_chat_history": test_chat_history or [],
+                "test_credential": test_credential
+            }
 
-        if "step_data" not in data["projects"][project_id]:
-            data["projects"][project_id]["step_data"] = {}
-        if step_key not in data["projects"][project_id]["step_data"]:
-            data["projects"][project_id]["step_data"][step_key] = {}
+            # 检查是否已存在阶段数据
+            existing = self.client.table("project_step_data")\
+                .select("id")\
+                .eq("project_id", project_id)\
+                .eq("form_id", form_id)\
+                .execute()
 
-        data["projects"][project_id]["step_data"][step_key]["test_state"] = {
-            "is_in_test": is_in_test,
-            "test_passed": test_passed,
-            "test_chat_history": test_chat_history or [],
-            "test_credential": test_credential,
-            "updated_at": datetime.now().isoformat()
-        }
+            if existing.data:
+                # 更新测试状态
+                self.client.table("project_step_data")\
+                    .update({"test_state": test_state})\
+                    .eq("project_id", project_id)\
+                    .eq("form_id", form_id)\
+                    .execute()
+            else:
+                # 创建新记录
+                data = {
+                    "project_id": project_id,
+                    "form_id": form_id,
+                    "test_state": test_state,
+                    "extracted_fields": {},
+                    "chat_history": []
+                }
+                self.client.table("project_step_data").insert(data).execute()
 
-        self._save_user_data(username, data)
+        except Exception as e:
+            print(f"❌ 保存测试状态失败: {e}")
 
     def get_test_state(self, username: str, form_id: int) -> Optional[dict]:
         """获取当前项目的测试状态"""
-        data = self._load_user_data(username)
-        project = self._get_current_project(data)
-        if not project:
+        try:
+            project_id = self.get_current_project_id(username)
+            if not project_id:
+                return None
+
+            result = self.client.table("project_step_data")\
+                .select("test_state")\
+                .eq("project_id", project_id)\
+                .eq("form_id", form_id)\
+                .execute()
+
+            if result.data:
+                return result.data[0].get("test_state")
+
             return None
 
-        step_key = str(form_id)
-        step_data = project.get("step_data", {}).get(step_key)
-        if step_data:
-            return step_data.get("test_state")
-        return None
+        except Exception as e:
+            print(f"❌ 获取测试状态失败: {e}")
+            return None
+
 
 # 单例
 progress_service = ProgressService()

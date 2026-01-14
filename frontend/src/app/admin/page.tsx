@@ -9,6 +9,7 @@ import { adminAPI, AdminUserInfo, AdminUserDetail, AdminProjectDetail } from "@/
 import WorkflowEditor from "@/components/admin/WorkflowEditor";
 import AgeAdaptationConfig from "@/components/admin/AgeAdaptationConfig";
 import PromptHistory from "@/components/admin/PromptHistory";
+import ModelSelector from "@/components/admin/ModelSelector";
 
 type TabType = "forms" | "users" | "settings";
 
@@ -33,6 +34,7 @@ export default function AdminPage() {
   const [selectedUser, setSelectedUser] = useState<AdminUserDetail | null>(null);
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [loadingUsers, setLoadingUsers] = useState(false);
+  const [selectedUsernames, setSelectedUsernames] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     if (isAuthenticated) {
@@ -74,6 +76,61 @@ export default function AdminPage() {
       }
     } catch (error) {
       console.error("加载用户详情失败:", error);
+    }
+  };
+
+  const toggleUserSelection = (username: string) => {
+    setSelectedUsernames(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(username)) {
+        newSet.delete(username);
+      } else {
+        newSet.add(username);
+      }
+      return newSet;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedUsernames.size === users.length) {
+      setSelectedUsernames(new Set());
+    } else {
+      setSelectedUsernames(new Set(users.map(u => u.username)));
+    }
+  };
+
+  const handleBatchExport = async () => {
+    if (selectedUsernames.size === 0) {
+      alert("请先选择要导出的用户");
+      return;
+    }
+
+    try {
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "";
+      const usernames = Array.from(selectedUsernames);
+
+      const response = await fetch(`${apiUrl}/api/admin/export-batch`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ usernames }),
+      });
+
+      if (!response.ok) throw new Error("批量导出失败");
+
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `batch_export_${new Date().toISOString().split('T')[0]}.zip`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+    } catch (error) {
+      console.error("批量导出失败:", error);
+      alert("批量导出失败");
     }
   };
 
@@ -245,7 +302,7 @@ export default function AdminPage() {
                             <div className={`mt-2 text-xs ${
                               selectedFormId === form.id ? "text-white/60" : "text-[#86868b]"
                             }`}>
-                              {form.fields.length} 个字段
+                              {(form.fields || []).length} 个字段
                             </div>
                           </motion.button>
                         ))}
@@ -299,21 +356,9 @@ export default function AdminPage() {
               {/* User List */}
               <div className="col-span-4">
                 <div className="bg-white rounded-2xl shadow-sm border border-[#d2d2d7]/50 overflow-hidden">
-                  <div className="p-4 border-b border-[#d2d2d7]/50 flex items-center justify-between">
-                    <h2 className="text-[15px] font-semibold text-[#1d1d1f]">用户列表</h2>
-                    <div className="flex items-center gap-2">
-                      <motion.button
-                        onClick={() => {
-                          const apiUrl = process.env.NEXT_PUBLIC_API_URL || "";
-                          window.open(`${apiUrl}/api/admin/export-users`, "_blank");
-                        }}
-                        whileHover={{ scale: 1.05 }}
-                        whileTap={{ scale: 0.95 }}
-                        className="px-3 py-1 text-xs font-medium text-[#0071e3] hover:bg-[#0071e3]/10 rounded-full transition-colors"
-                        title="导出用户CSV"
-                      >
-                        导出CSV
-                      </motion.button>
+                  <div className="p-4 border-b border-[#d2d2d7]/50">
+                    <div className="flex items-center justify-between mb-3">
+                      <h2 className="text-[15px] font-semibold text-[#1d1d1f]">用户列表</h2>
                       <motion.button
                         onClick={loadUsers}
                         whileHover={{ scale: 1.05 }}
@@ -322,6 +367,60 @@ export default function AdminPage() {
                       >
                         ↻
                       </motion.button>
+                    </div>
+
+                    {/* 批量操作区域 */}
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-2">
+                        <motion.button
+                          onClick={toggleSelectAll}
+                          whileHover={{ scale: 1.02 }}
+                          whileTap={{ scale: 0.98 }}
+                          className="flex-1 px-3 py-2 text-xs font-medium text-[#0071e3] bg-[#0071e3]/10 hover:bg-[#0071e3]/20 rounded-lg transition-colors"
+                        >
+                          {selectedUsernames.size === users.length && users.length > 0 ? "取消全选" : "全选"}
+                        </motion.button>
+                        <motion.button
+                          onClick={handleBatchExport}
+                          disabled={selectedUsernames.size === 0}
+                          whileHover={{ scale: selectedUsernames.size > 0 ? 1.02 : 1 }}
+                          whileTap={{ scale: selectedUsernames.size > 0 ? 0.98 : 1 }}
+                          className={`flex-1 px-3 py-2 text-xs font-medium rounded-lg transition-colors ${
+                            selectedUsernames.size > 0
+                              ? "text-white bg-[#34c759] hover:bg-[#30b350]"
+                              : "text-[#86868b] bg-[#f5f5f7] cursor-not-allowed"
+                          }`}
+                        >
+                          批量导出 ({selectedUsernames.size})
+                        </motion.button>
+                      </div>
+
+                      <div className="flex gap-2">
+                        <motion.button
+                          onClick={() => {
+                            const apiUrl = process.env.NEXT_PUBLIC_API_URL || "";
+                            window.open(`${apiUrl}/api/admin/export-users`, "_blank");
+                          }}
+                          whileHover={{ scale: 1.02 }}
+                          whileTap={{ scale: 0.98 }}
+                          className="flex-1 px-3 py-1.5 text-xs font-medium text-[#0071e3] hover:bg-[#0071e3]/10 rounded-lg transition-colors"
+                          title="导出所有用户状态CSV（包含字段数据）"
+                        >
+                          导出状态
+                        </motion.button>
+                        <motion.button
+                          onClick={() => {
+                            const apiUrl = process.env.NEXT_PUBLIC_API_URL || "";
+                            window.open(`${apiUrl}/api/admin/export-users-chats`, "_blank");
+                          }}
+                          whileHover={{ scale: 1.02 }}
+                          whileTap={{ scale: 0.98 }}
+                          className="flex-1 px-3 py-1.5 text-xs font-medium text-[#34c759] hover:bg-[#34c759]/10 rounded-lg transition-colors"
+                          title="导出所有用户聊天记录CSV"
+                        >
+                          导出聊天
+                        </motion.button>
+                      </div>
                     </div>
                   </div>
 
@@ -338,47 +437,90 @@ export default function AdminPage() {
                     ) : (
                       <div className="p-2">
                         {users.map((user) => (
-                          <motion.button
+                          <motion.div
                             key={user.username}
-                            onClick={() => loadUserDetail(user.username)}
-                            whileTap={{ scale: 0.98 }}
-                            className={`w-full p-3 rounded-xl text-left transition-all mb-1 ${
+                            className={`rounded-xl mb-1 ${
                               selectedUser?.username === user.username
-                                ? "bg-[#0071e3] text-white"
-                                : "hover:bg-[#f5f5f7]"
+                                ? "bg-[#0071e3]"
+                                : ""
                             }`}
                           >
-                            <div className={`text-[15px] font-medium mb-1 ${
-                              selectedUser?.username === user.username ? "text-white" : "text-[#1d1d1f]"
-                            }`}>
-                              {user.username}
-                            </div>
-                            {user.profile && (
-                              <div className={`text-xs mb-1 ${
-                                selectedUser?.username === user.username ? "text-white/70" : "text-[#86868b]"
-                              }`}>
-                                {user.profile.grade} | {user.profile.gender} | {user.profile.math_score}
-                              </div>
-                            )}
-                            <div className="flex gap-2 flex-wrap">
-                              <span className={`text-xs px-2 py-0.5 rounded-full ${
-                                selectedUser?.username === user.username
-                                  ? "bg-white/20 text-white"
-                                  : "bg-[#ff9500]/10 text-[#ff9500]"
-                              }`}>
-                                {user.projects.length} 个项目
-                              </span>
-                              {user.projects.filter(p => p.is_current).map(p => (
-                                <span key={p.id} className={`text-xs px-2 py-0.5 rounded-full ${
+                            {/* 复选框和用户信息 */}
+                            <div className="flex items-start gap-2 p-3">
+                              {/* 复选框 */}
+                              <input
+                                type="checkbox"
+                                checked={selectedUsernames.has(user.username)}
+                                onChange={(e) => {
+                                  e.stopPropagation();
+                                  toggleUserSelection(user.username);
+                                }}
+                                className="mt-1 w-4 h-4 rounded border-2 border-[#d2d2d7] text-[#0071e3] focus:ring-2 focus:ring-[#0071e3] focus:ring-offset-0 cursor-pointer"
+                              />
+
+                              {/* 用户信息 */}
+                              <motion.button
+                                onClick={() => loadUserDetail(user.username)}
+                                whileTap={{ scale: 0.98 }}
+                                className={`flex-1 text-left transition-all ${
                                   selectedUser?.username === user.username
-                                    ? "bg-white/20 text-white"
-                                    : "bg-[#0071e3]/10 text-[#0071e3]"
+                                    ? "text-white"
+                                    : ""
+                                }`}
+                              >
+                                <div className={`text-[15px] font-medium mb-1 ${
+                                  selectedUser?.username === user.username ? "text-white" : "text-[#1d1d1f]"
                                 }`}>
-                                  当前: {p.name}
-                                </span>
-                              ))}
+                                  {user.username}
+                                </div>
+                                {user.profile && (
+                                  <div className={`text-xs mb-1 ${
+                                    selectedUser?.username === user.username ? "text-white/70" : "text-[#86868b]"
+                                  }`}>
+                                    {user.profile.grade} | {user.profile.gender} | {user.profile.math_score}
+                                  </div>
+                                )}
+                                <div className="flex gap-2 flex-wrap">
+                                  <span className={`text-xs px-2 py-0.5 rounded-full ${
+                                    selectedUser?.username === user.username
+                                      ? "bg-white/20 text-white"
+                                      : "bg-[#ff9500]/10 text-[#ff9500]"
+                                  }`}>
+                                    {(user.projects || []).length} 个项目
+                                  </span>
+                                  {(user.projects || []).filter(p => p.is_current).map(p => (
+                                    <span key={p.id} className={`text-xs px-2 py-0.5 rounded-full ${
+                                      selectedUser?.username === user.username
+                                        ? "bg-white/20 text-white"
+                                        : "bg-[#0071e3]/10 text-[#0071e3]"
+                                    }`}>
+                                      当前: {p.name}
+                                    </span>
+                                  ))}
+                                </div>
+                              </motion.button>
                             </div>
-                          </motion.button>
+
+                            {/* 单个用户导出按钮 */}
+                            <div className="px-3 pb-2">
+                              <motion.button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  const apiUrl = process.env.NEXT_PUBLIC_API_URL || "";
+                                  window.open(`${apiUrl}/api/admin/export-user/${user.username}`, "_blank");
+                                }}
+                                whileHover={{ scale: 1.02 }}
+                                whileTap={{ scale: 0.98 }}
+                                className={`w-full px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${
+                                  selectedUser?.username === user.username
+                                    ? "bg-white/20 text-white hover:bg-white/30"
+                                    : "bg-[#f5f5f7] text-[#0071e3] hover:bg-[#e8e8ed]"
+                                }`}
+                              >
+                                导出该用户数据
+                              </motion.button>
+                            </div>
+                          </motion.div>
                         ))}
                       </div>
                     )}
@@ -401,7 +543,7 @@ export default function AdminPage() {
 
                     {/* Project Tabs */}
                     <div className="flex gap-2 mb-6 flex-wrap">
-                      {Object.entries(selectedUser.projects).map(([projectId, project]) => (
+                      {Object.entries(selectedUser.projects || {}).map(([projectId, project]) => (
                         <motion.button
                           key={projectId}
                           onClick={() => setSelectedProjectId(projectId)}
@@ -563,6 +705,9 @@ export default function AdminPage() {
               transition={{ duration: 0.3 }}
               className="max-w-4xl mx-auto space-y-6"
             >
+              <div className="bg-white rounded-2xl shadow-sm border border-[#d2d2d7]/50 overflow-hidden p-6">
+                <ModelSelector />
+              </div>
               <div className="bg-white rounded-2xl shadow-sm border border-[#d2d2d7]/50 overflow-hidden p-6">
                 <WorkflowEditor />
               </div>

@@ -1,0 +1,13 @@
+{
+    "api_provider": "volcengine",
+    "api_key": "7c51735e-0a71-4e2f-b775-2668f3efb757",
+    "api_endpoint": "https://ark.cn-beijing.volces.com/api/v3",
+    "default_model": "doubao-seed-1-6-lite-251015",
+    "fast_model": "doubao-seed-1-6-lite-251015",
+    "vision_model": "doubao-seed-1-6-lite-251015",
+    "vision_model_enabled": true,
+    "reasoning_effort": "medium",
+    "chat_mode": "single_agent",
+    "debug_mode": true,
+    "_comment": "火山引擎豆包模型配置示例。reasoning_effort可选值: low, medium, high"
+}

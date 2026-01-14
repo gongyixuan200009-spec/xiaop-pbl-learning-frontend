@@ -160,6 +160,68 @@ async def list_users():
     
     return {"users": users_list}
 
+
+@router.get("/users-summary")
+async def list_users_summary():
+    """列出所有用户的概要信息（不包含聊天记录，用于列表展示）"""
+    progress_dir = DATA_DIR / "user_progress"
+    users_file = DATA_DIR / "users.json"
+
+    users_list = []
+
+    # 获取所有用户
+    users_data = {}
+    if users_file.exists():
+        with open(users_file, "r", encoding="utf-8") as f:
+            users_data = json.load(f)
+    all_usernames = list(users_data.keys())
+    
+    # 也从进度文件中获取用户名
+    if progress_dir.exists():
+        for f in progress_dir.iterdir():
+            if f.suffix == ".json":
+                username = f.stem
+                if username not in all_usernames:
+                    all_usernames.append(username)
+    
+    for username in all_usernames:
+        user_info = {
+            "username": username,
+            "profile": users_data.get(username, {}).get("profile", {}),
+            "projects": []
+        }
+
+        progress_file = progress_dir / f"{username}.json"
+        if progress_file.exists():
+            try:
+                with open(progress_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+
+                    # 兼容新旧两种数据格式
+                    current_project_id = data.get("current_project_id")
+                    if current_project_id and "projects" in data:
+                        # 新格式：有项目管理
+                        for project_id, project in data["projects"].items():
+                            user_info["projects"].append({
+                                "id": project_id,
+                                "name": project.get("name", "未命名项目"),
+                                "is_current": project_id == current_project_id
+                            })
+                    else:
+                        # 旧格式：无项目管理（向后兼容）
+                        user_info["projects"].append({
+                            "id": "default",
+                            "name": "默认项目",
+                            "is_current": True
+                        })
+
+            except Exception as e:
+                pass
+
+        users_list.append(user_info)
+    
+    return {"users": users_list}
+
 @router.get("/users/{username}")
 async def get_user_detail(username: str):
     """获取指定用户的详细数据"""
@@ -172,7 +234,37 @@ async def get_user_detail(username: str):
     with open(progress_file, "r", encoding="utf-8") as f:
         data = json.load(f)
 
-    return data
+    # 兼容新旧两种数据格式
+    current_project_id = data.get("current_project_id")
+    if current_project_id and "projects" in data:
+        # 新格式：有项目管理，返回完整的项目数据
+        return {
+            "username": data.get("username"),
+            "current_project_id": current_project_id,
+            "projects": data.get("projects", {}),
+            "created_at": data.get("created_at"),
+            "updated_at": data.get("updated_at")
+        }
+    else:
+        # 旧格式：无项目管理，包装成项目格式返回
+        default_project_id = "default"
+        return {
+            "username": data.get("username"),
+            "current_project_id": default_project_id,
+            "projects": {
+                default_project_id: {
+                    "id": default_project_id,
+                    "name": "默认项目",
+                    "current_step": data.get("current_step", 1),
+                    "completed_steps": data.get("completed_steps", []),
+                    "step_data": data.get("step_data", {}),
+                    "created_at": data.get("created_at"),
+                    "updated_at": data.get("updated_at")
+                }
+            },
+            "created_at": data.get("created_at"),
+            "updated_at": data.get("updated_at")
+        }
 
 @router.get("/export-users")
 async def export_users_csv():
@@ -205,21 +297,19 @@ async def export_users_csv():
     users_list = []
     for username in all_usernames:
         user_info = {
-            "用户名": username,
+            "用户名": username or "-",
             "当前阶段": 1,
-            "已完成阶段": "",
-            "年龄": "",
-            "性别": "",
-            "学校": "",
-            "年级": "",
+            "已完成阶段": "-",
         }
 
-        # 获取用户 profile
+        # 获取用户 profile（包含所有注册信息）
         profile = users_data.get(username, {}).get("profile", {})
-        user_info["年龄"] = profile.get("age", "")
-        user_info["性别"] = profile.get("gender", "")
-        user_info["学校"] = profile.get("school", "")
-        user_info["年级"] = profile.get("grade", "")
+        user_info["年级"] = profile.get("grade", "-")
+        user_info["性别"] = profile.get("gender", "-")
+        user_info["数学成绩"] = profile.get("math_score", "-")
+        user_info["理科感受"] = profile.get("science_feeling", "-")
+        user_info["年龄"] = profile.get("age", "-")
+        user_info["学校"] = profile.get("school", "-")
 
         # 获取进度信息
         progress_file = progress_dir / f"{username}.json"
@@ -227,17 +317,34 @@ async def export_users_csv():
             try:
                 with open(progress_file, "r", encoding="utf-8") as pf:
                     data = json.load(pf)
-                    user_info["当前阶段"] = data.get("current_step", 1)
-                    completed = data.get("completed_steps", [])
-                    user_info["已完成阶段"] = ", ".join(map(str, completed)) if completed else ""
+                    # 兼容新旧两种数据格式
+                    current_project_id = data.get("current_project_id")
+                    if current_project_id and "projects" in data:
+                        # 新格式：有项目管理
+                        project = data["projects"][current_project_id]
+                        user_info["当前阶段"] = project.get("current_step", 1)
+                        completed = project.get("completed_steps", [])
+                        step_data = project.get("step_data", {})
+                    else:
+                        # 旧格式：无项目管理（向后兼容）
+                        user_info["当前阶段"] = data.get("current_step", 1)
+                        completed = data.get("completed_steps", [])
+                        step_data = data.get("step_data", {})
 
-                    # 提取每个阶段的字段数据
-                    step_data = data.get("step_data", {})
+                    user_info["已完成阶段"] = ", ".join(map(str, completed)) if completed else "-"
+
                     for step_id, step_info in step_data.items():
                         extracted = step_info.get("extracted_fields", {})
                         for field_name, field_value in extracted.items():
                             col_name = f"阶段{step_id}_{field_name}"
-                            user_info[col_name] = field_value if field_value else ""
+                            # 处理空值
+                            if field_value:
+                                if isinstance(field_value, list):
+                                    user_info[col_name] = ", ".join(str(v) for v in field_value if v)
+                                else:
+                                    user_info[col_name] = str(field_value)
+                            else:
+                                user_info[col_name] = "-"
 
                         # 提取测试状态数据
                         test_state = step_info.get("test_state", {})
@@ -255,26 +362,27 @@ async def export_users_csv():
 
                             # 测试凭证
                             test_credential = test_state.get("test_credential", "")
-                            user_info[f"阶段{step_id}_测试凭证"] = test_credential
+                            user_info[f"阶段{step_id}_测试凭证"] = test_credential or "-"
 
                             # 测试对话（格式化为可读文本）
                             test_chat = test_state.get("test_chat_history", [])
                             if test_chat:
                                 chat_text = []
                                 for msg in test_chat:
-                                    role = "用户" if msg.get("role") == "user" else "小P"
+                                    role = "用户" if msg.get("role") == "user" else "工小助"
                                     content = msg.get("content", "")
-                                    chat_text.append(f"[{role}]: {content}")
-                                user_info[f"阶段{step_id}_测试对话"] = " | ".join(chat_text)
+                                    if content:
+                                        chat_text.append(f"[{role}]: {content}")
+                                user_info[f"阶段{step_id}_测试对话"] = " | ".join(chat_text) if chat_text else "-"
                             else:
-                                user_info[f"阶段{step_id}_测试对话"] = ""
+                                user_info[f"阶段{step_id}_测试对话"] = "-"
             except Exception as e:
                 pass
 
         users_list.append(user_info)
 
     # 收集所有可能的列名
-    all_columns = ["用户名", "当前阶段", "已完成阶段", "年龄", "性别", "学校", "年级"]
+    all_columns = ["用户名", "年级", "性别", "数学成绩", "理科感受", "年龄", "学校", "当前阶段", "已完成阶段"]
     extra_columns = set()
     for user in users_list:
         for key in user.keys():
@@ -287,7 +395,9 @@ async def export_users_csv():
     writer = csv.DictWriter(output, fieldnames=all_columns, extrasaction='ignore')
     writer.writeheader()
     for user in users_list:
-        writer.writerow(user)
+        # 确保所有字段都有值，空值用 "-" 填充
+        row = {col: user.get(col, "-") for col in all_columns}
+        writer.writerow(row)
 
     # 添加UTF-8 BOM并转换为bytes
     output.seek(0)
@@ -296,6 +406,269 @@ async def export_users_csv():
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = f"users_export_{timestamp}.csv"
+
+    return StreamingResponse(
+        iter([csv_bytes]),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
+    )
+
+
+@router.get("/export-user/{username}")
+async def export_single_user_csv(username: str):
+    """导出单个用户的详细数据为CSV文件（三列格式：角色、内容、用户名）"""
+    import csv
+    import io
+    from datetime import datetime
+    from fastapi.responses import StreamingResponse
+
+    progress_dir = DATA_DIR / "user_progress"
+    users_file = DATA_DIR / "users.json"
+
+    # 获取用户基本信息
+    users_data = {}
+    if users_file.exists():
+        with open(users_file, "r", encoding="utf-8") as f:
+            users_data = json.load(f)
+
+    if username not in users_data:
+        # 检查是否有进度文件
+        progress_file = progress_dir / f"{username}.json"
+        if not progress_file.exists():
+            raise HTTPException(status_code=404, detail="用户不存在")
+
+    user_rows = []
+
+    # 获取进度信息
+    progress_file = progress_dir / f"{username}.json"
+    if progress_file.exists():
+        try:
+            with open(progress_file, "r", encoding="utf-8") as pf:
+                data = json.load(pf)
+
+                # 兼容新旧两种数据格式
+                current_project_id = data.get("current_project_id")
+                if current_project_id and "projects" in data:
+                    # 新格式：有项目管理，导出所有项目
+                    for project_id, project in data["projects"].items():
+                        project_name = project.get("name", "未命名项目")
+                        is_current = "(当前)" if project_id == current_project_id else ""
+
+                        # 项目进度信息
+                        user_rows.append({
+                            "类型": "项目进度",
+                            "项目": f"{project_name}{is_current}",
+                            "阶段": "-",
+                            "字段名": "当前阶段",
+                            "字段值": str(project.get("current_step", 1))
+                        })
+
+                        completed = project.get("completed_steps", [])
+                        user_rows.append({
+                            "类型": "项目进度",
+                            "项目": f"{project_name}{is_current}",
+                            "阶段": "-",
+                            "字段名": "已完成阶段",
+                            "字段值": ", ".join(map(str, completed)) if completed else "-"
+                        })
+
+                        # 各阶段数据
+                        step_data = project.get("step_data", {})
+                        for step_id, step_info in step_data.items():
+                            # 提取的字段
+                            extracted = step_info.get("extracted_fields", {})
+                            for field_name, field_value in extracted.items():
+                                if field_value:
+                                    if isinstance(field_value, list):
+                                        value = ", ".join(str(v) for v in field_value if v)
+                                    else:
+                                        value = str(field_value)
+                                else:
+                                    value = "-"
+
+                                user_rows.append({
+                                    "类型": "阶段数据",
+                                    "项目": f"{project_name}{is_current}",
+                                    "阶段": step_id,
+                                    "字段名": field_name,
+                                    "字段值": value
+                                })
+
+                            # 聊天记录
+                            chat_history = step_info.get("chat_history", [])
+                            if chat_history:
+                                for msg in chat_history:
+                                    role = "学生" if msg.get("role") == "user" else "AI"
+                                    content = msg.get("content", "")
+                                    if content:
+                                        user_rows.append({
+                                            "类型": "聊天记录",
+                                            "项目": f"{project_name}{is_current}",
+                                            "阶段": step_id,
+                                            "字段名": role,
+                                            "字段值": content
+                                        })
+
+                            # 测试状态
+                            test_state = step_info.get("test_state", {})
+                            if test_state:
+                                is_in_test = test_state.get("is_in_test", False)
+                                test_passed = test_state.get("test_passed", False)
+                                if test_passed:
+                                    status = "已通过"
+                                elif is_in_test:
+                                    status = "进行中"
+                                else:
+                                    status = "未开始"
+
+                                user_rows.append({
+                                    "类型": "测试状态",
+                                    "项目": f"{project_name}{is_current}",
+                                    "阶段": step_id,
+                                    "字段名": "测试状态",
+                                    "字段值": status
+                                })
+
+                                test_credential = test_state.get("test_credential", "")
+                                if test_credential:
+                                    user_rows.append({
+                                        "类型": "测试状态",
+                                        "项目": f"{project_name}{is_current}",
+                                        "阶段": step_id,
+                                        "字段名": "测试凭证",
+                                        "字段值": test_credential
+                                    })
+
+                                # 测试对话
+                                test_chat = test_state.get("test_chat_history", [])
+                                if test_chat:
+                                    for msg in test_chat:
+                                        role = "学生" if msg.get("role") == "user" else "AI"
+                                        content = msg.get("content", "")
+                                        if content:
+                                            user_rows.append({
+                                                "类型": "测试对话",
+                                                "项目": f"{project_name}{is_current}",
+                                                "阶段": step_id,
+                                                "字段名": role,
+                                                "字段值": content
+                                            })
+                else:
+                    # 旧格式：无项目管理
+                    user_rows.append({
+                        "类型": "项目进度",
+                        "项目": "默认项目",
+                        "阶段": "-",
+                        "字段名": "当前阶段",
+                        "字段值": str(data.get("current_step", 1))
+                    })
+
+                    completed = data.get("completed_steps", [])
+                    user_rows.append({
+                        "类型": "项目进度",
+                        "项目": "默认项目",
+                        "阶段": "-",
+                        "字段名": "已完成阶段",
+                        "字段值": ", ".join(map(str, completed)) if completed else "-"
+                    })
+
+                    # 各阶段数据
+                    step_data = data.get("step_data", {})
+                    for step_id, step_info in step_data.items():
+                        extracted = step_info.get("extracted_fields", {})
+                        for field_name, field_value in extracted.items():
+                            if field_value:
+                                if isinstance(field_value, list):
+                                    value = ", ".join(str(v) for v in field_value if v)
+                                else:
+                                    value = str(field_value)
+                            else:
+                                value = "-"
+
+                            user_rows.append({
+                                "类型": "阶段数据",
+                                "项目": "默认项目",
+                                "阶段": step_id,
+                                "字段名": field_name,
+                                "字段值": value
+                            })
+
+                        # 聊天记录
+                        chat_history = step_info.get("chat_history", [])
+                        if chat_history:
+                            for msg in chat_history:
+                                role = "学生" if msg.get("role") == "user" else "AI"
+                                content = msg.get("content", "")
+                                if content:
+                                    user_rows.append({
+                                        "类型": "聊天记录",
+                                        "项目": "默认项目",
+                                        "阶段": step_id,
+                                        "字段名": role,
+                                        "字段值": content
+                                    })
+
+                        # 测试状态（同上）
+                        test_state = step_info.get("test_state", {})
+                        if test_state:
+                            is_in_test = test_state.get("is_in_test", False)
+                            test_passed = test_state.get("test_passed", False)
+                            if test_passed:
+                                status = "已通过"
+                            elif is_in_test:
+                                status = "进行中"
+                            else:
+                                status = "未开始"
+
+                            user_rows.append({
+                                "类型": "测试状态",
+                                "项目": "默认项目",
+                                "阶段": step_id,
+                                "字段名": "测试状态",
+                                "字段值": status
+                            })
+
+                            test_credential = test_state.get("test_credential", "")
+                            if test_credential:
+                                user_rows.append({
+                                    "类型": "测试状态",
+                                    "项目": "默认项目",
+                                    "阶段": step_id,
+                                    "字段名": "测试凭证",
+                                    "字段值": test_credential
+                                })
+
+                            test_chat = test_state.get("test_chat_history", [])
+                            if test_chat:
+                                for msg in test_chat:
+                                    role = "学生" if msg.get("role") == "user" else "AI"
+                                    content = msg.get("content", "")
+                                    if content:
+                                        user_rows.append({
+                                            "类型": "测试对话",
+                                            "项目": "默认项目",
+                                            "阶段": step_id,
+                                            "字段名": role,
+                                            "字段值": content
+                                        })
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"读取用户数据失败: {str(e)}")
+
+    # 生成CSV
+    output = io.StringIO()
+    fieldnames = ["类型", "项目", "阶段", "字段名", "字段值"]
+    writer = csv.DictWriter(output, fieldnames=fieldnames)
+    writer.writeheader()
+    for row in user_rows:
+        writer.writerow(row)
+
+    # 添加UTF-8 BOM并转换为bytes
+    output.seek(0)
+    csv_content = '\ufeff' + output.getvalue()
+    csv_bytes = csv_content.encode('utf-8')
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"user_{username}_{timestamp}.csv"
 
     return StreamingResponse(
         iter([csv_bytes]),

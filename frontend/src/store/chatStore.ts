@@ -62,6 +62,9 @@ interface ChatState {
   // 项目切换相关
   resetAllProgress: () => void;  // 重置所有进度（切换项目时使用）
 
+  // 硬性容错：清理无效消息
+  cleanInvalidMessages: () => void;
+
   getCurrentForm: () => FormConfig | undefined;
 }
 
@@ -374,6 +377,50 @@ export const useChatStore = create<ChatState>()(
         testPassed: false,
         testChatHistory: [],
         testCredential: "",
+      }),
+
+      // 硬性容错：清理无效消息
+      cleanInvalidMessages: () => set((state) => {
+        // 清理主聊天历史
+        const cleanedHistory = state.chatHistory.filter(msg => {
+          if (!msg || typeof msg !== 'object') return false;
+          if (!msg.role || typeof msg.role !== 'string') return false;
+          if (msg.content === null || msg.content === undefined) return false;
+          if (typeof msg.content !== 'string') return false;
+          if (msg.content.trim() === '') return false;
+          return true;
+        });
+
+        // 清理测试聊天历史
+        const cleanedTestHistory = state.testChatHistory.filter(msg => {
+          if (!msg || typeof msg !== 'object') return false;
+          if (!msg.role || typeof msg.role !== 'string') return false;
+          if (msg.content === null || msg.content === undefined) return false;
+          if (typeof msg.content !== 'string') return false;
+          if (msg.content.trim() === '') return false;
+          return true;
+        });
+
+        const removedCount = (state.chatHistory.length - cleanedHistory.length) +
+                            (state.testChatHistory.length - cleanedTestHistory.length);
+
+        if (removedCount > 0) {
+          console.warn(`[硬性容错] 从历史记录中移除了 ${removedCount} 条无效消息`);
+        }
+
+        // 更新 stepProgress
+        const newStepProgress = { ...state.stepProgress };
+        newStepProgress[state.currentFormId] = {
+          ...newStepProgress[state.currentFormId],
+          chatHistory: cleanedHistory,
+          testChatHistory: cleanedTestHistory,
+        };
+
+        return {
+          chatHistory: cleanedHistory,
+          testChatHistory: cleanedTestHistory,
+          stepProgress: newStepProgress,
+        };
       }),
 
       getCurrentForm: () => {

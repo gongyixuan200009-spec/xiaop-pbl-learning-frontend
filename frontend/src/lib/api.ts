@@ -239,6 +239,78 @@ export interface StreamCallbacks {
   onError?: (error: Error) => void;
 }
 
+// ========== 数据清理工具函数 ==========
+/**
+ * 清理聊天消息，确保所有字段符合schema要求
+ * 这是硬性容错机制，防止脏数据导致422验证错误
+ */
+function sanitizeChatMessage(msg: any): ChatMessage | null {
+  try {
+    // 必须有role和content
+    if (!msg || typeof msg !== 'object') {
+      console.warn('[数据清理] 无效的消息对象:', msg);
+      return null;
+    }
+
+    const role = msg.role;
+    if (role !== 'user' && role !== 'assistant') {
+      console.warn('[数据清理] 无效的role:', role);
+      return null;
+    }
+
+    // content必须是字符串，如果不是则转换或丢弃
+    let content = msg.content;
+    if (content === null || content === undefined) {
+      console.warn('[数据清理] content为null/undefined，已丢弃该消息');
+      return null;
+    }
+    if (typeof content !== 'string') {
+      console.warn('[数据清理] content不是字符串，尝试转换:', typeof content, content);
+      content = String(content);
+    }
+
+    // 清理后的消息
+    const sanitized: ChatMessage = {
+      role,
+      content,
+    };
+
+    // 可选字段
+    if (msg.image_url && typeof msg.image_url === 'string') {
+      sanitized.image_url = msg.image_url;
+    }
+    if (msg.timestamp && typeof msg.timestamp === 'string') {
+      sanitized.timestamp = msg.timestamp;
+    }
+
+    return sanitized;
+  } catch (error) {
+    console.error('[数据清理] 清理消息时出错:', error, msg);
+    return null;
+  }
+}
+
+/**
+ * 清理聊天历史数组
+ */
+function sanitizeChatHistory(history: any[]): ChatMessage[] {
+  if (!Array.isArray(history)) {
+    console.warn('[数据清理] 聊天历史不是数组:', history);
+    return [];
+  }
+
+  const cleaned = history
+    .map(sanitizeChatMessage)
+    .filter((msg): msg is ChatMessage => msg !== null);
+
+  const removed = history.length - cleaned.length;
+  if (removed > 0) {
+    console.warn(`[数据清理] 已移除 ${removed} 条无效消息`);
+  }
+
+  return cleaned;
+}
+
 export const chatAPI = {
   getForms: () =>
     fetchAPI<FormConfig[]>("/api/chat/forms"),
@@ -286,6 +358,16 @@ export const chatAPI = {
     callbacks: StreamCallbacks,
     imageUrl?: string  // 图片URL（可选）
   ): Promise<void> => {
+    // 硬性容错：清理聊天历史，移除无效消息
+    const cleanedHistory = sanitizeChatHistory(chatHistory);
+
+    // 如果清理后的历史与原始不同，记录警告
+    if (cleanedHistory.length !== chatHistory.length) {
+      console.warn(
+        `[硬性容错] 聊天历史已清理: ${chatHistory.length} -> ${cleanedHistory.length} 条消息`
+      );
+    }
+
     const response = await fetch(`${API_BASE}/api/chat/message/stream`, {
       method: "POST",
       headers: {
@@ -295,7 +377,7 @@ export const chatAPI = {
       body: JSON.stringify({
         message,
         form_id: formId,
-        chat_history: chatHistory,
+        chat_history: cleanedHistory,  // 使用清理后的历史
         extracted_fields: extractedFields,
         image_url: imageUrl,  // 添加图片URL
       }),
@@ -305,17 +387,25 @@ export const chatAPI = {
       const error = await response.json().catch(() => ({ detail: "请求失败" }));
       // 处理 422 错误 - detail 可能是数组
       let errorMsg = "请求失败";
+      let isValidationError = false;
+
       if (error.detail) {
         if (Array.isArray(error.detail)) {
           // FastAPI 422 验证错误返回数组格式
           errorMsg = error.detail.map((e: any) => e.msg || JSON.stringify(e)).join("; ");
+          isValidationError = true;
         } else if (typeof error.detail === 'string') {
           errorMsg = error.detail;
         } else {
           errorMsg = JSON.stringify(error.detail);
         }
       }
-      throw new Error(errorMsg);
+
+      // 如果是验证错误，标记需要清理历史记录
+      const err: any = new Error(errorMsg);
+      err.isValidationError = isValidationError;
+      err.statusCode = response.status;
+      throw err;
     }
 
     const reader = response.body?.getReader();
@@ -494,6 +584,16 @@ export const chatAPI = {
       reader.releaseLock();
     }
   },
+
+  // 重置阶段数据
+  resetStep: (token: string, formId: number) =>
+    fetchAPI<{ success: boolean; message: string; form_id: number }>(
+      `/api/chat/reset-step/${formId}`,
+      {
+        method: "POST",
+        token,
+      }
+    ),
 };
 
 // ========== 管理API ==========
@@ -561,7 +661,7 @@ export const adminAPI = {
     fetchAPI<Array<{ name: string; size: number; modified: number }>>("/api/admin/data"),
 
   getUsers: () =>
-    fetchAPI<{ users: AdminUserInfo[] }>("/api/admin/users"),
+    fetchAPI<{ users: AdminUserInfo[] }>("/api/admin/users-summary"),
 
   getUserDetail: (username: string) =>
     fetchAPI<AdminUserDetail>(`/api/admin/users/${username}`),

@@ -1,0 +1,12 @@
+{
+    "api_provider": "openrouter",
+    "api_key": "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",
+    "api_endpoint": "https://openrouter.ai/api/v1",
+    "default_model": "deepseek/deepseek-chat",
+    "fast_model": "deepseek/deepseek-chat",
+    "vision_model": "openai/gpt-4o-mini",
+    "vision_model_enabled": true,
+    "chat_mode": "single_agent",
+    "debug_mode": true,
+    "_comment": "OpenRouter配置示例（当前使用的配置）"
+}
