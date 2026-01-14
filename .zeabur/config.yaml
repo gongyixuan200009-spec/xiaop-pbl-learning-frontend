@@ -1,0 +1,10 @@
+# Zeabur 项目配置
+# 指定后端服务的根目录和构建配置
+
+services:
+  backend:
+    path: backend
+    build:
+      buildCommand: pip install -r requirements.txt
+    start:
+      startCommand: uvicorn main:app --host 0.0.0.0 --port 8080
